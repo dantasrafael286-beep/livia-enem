@@ -1,0 +1,39 @@
+name: Lembretes
+
+on:
+  schedule:
+    - cron: "0 10 * * *" # 7h em Brasília
+    - cron: "0 23 * * *" # 20h em Brasília
+  workflow_dispatch:
+    inputs:
+      titulo:
+        description: "Título (opcional)"
+        required: false
+      mensagem:
+        description: "Mensagem sua (vazio = a automática do dia)"
+        required: false
+      momento:
+        description: "Se for a automática: manha ou noite"
+        required: false
+        default: "manha"
+
+permissions:
+  contents: read
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pywebpush==2.5.0
+      - run: python ferramentas/lembretes.py
+        env:
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          PUSH_SUBS: ${{ secrets.PUSH_SUBS }}
+          AGENDA: ${{ github.event.schedule }}
+          MOMENTO: ${{ inputs.momento }}
+          TITULO: ${{ inputs.titulo }}
+          MENSAGEM: ${{ inputs.mensagem }}
