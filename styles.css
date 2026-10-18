@@ -266,3 +266,13 @@ body.modo-desafio .wrap{padding-bottom:calc(24px + var(--safe-b))}
 .feedback .linha-btns{align-items:center}
 .errada{border-top:1px solid var(--linha);padding:10px 0}
 .errada:first-of-type{border-top:0}
+
+/* ---- ENEM de verdade ---- */
+.enem-texto{font-size:15.5px;line-height:1.55}
+.enem-texto p{margin:0 0 10px}
+.enem-texto i{color:var(--tinta-fraca);font-size:13px}
+.enem-img{display:block;max-width:100%;height:auto;margin:8px auto;background:#fff;border:1px solid var(--linha)}
+.alt .enem-img{margin:0;max-height:180px}
+.enem-enunciado p{margin:0}
+#en-tempo{font-size:18px;min-width:44px;text-align:right}
+#en-tempo.passou{color:var(--vermelho)}

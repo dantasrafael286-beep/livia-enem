@@ -413,12 +413,15 @@
       : seq ? `Não deixa apagar: ${plural(seq, "dia", "dias")} seguidos` : "Acenda seu foguinho de hoje";
     const sub = ok
       ? "Aceso por hoje. Volta amanhã pra manter a sequência."
-      : "3 minutos de questões rápidas acendem o foguinho do dia.";
+      : "3 minutos de questões rápidas ou 3 questões reais do ENEM acendem o foguinho do dia.";
     return `<div class="card fogo-card">
       <div class="fogo-topo"><div class="chama${ok ? " acesa" : ""}" aria-hidden="true">🔥</div>
         <div><h3>${titulo}</h3><p class="small muted" style="margin:0">${sub}</p></div></div>
       ${faixaSemana()}
-      <a class="btn full${ok ? " ghost" : ""}" href="#desafio">${ok ? "Treinar mais 3 min" : "Começar desafio (3 min)"}</a>
+      <div class="linha-btns" style="margin-top:0">
+        <a class="btn${ok ? " ghost" : ""}" href="#desafio">⚡ Rápidas (3 min)</a>
+        <a class="btn ghost" href="#enem">📝 3 do ENEM real</a>
+      </div>
       <div class="small muted fogo-rodape"><span>Recorde: ${plural(Math.max(S.melhorSeq || 0, seq), "dia", "dias")}</span><span>Protetores: ${"🧊".repeat(S.protetores || 0) || "nenhum"}</span></div>
     </div>`;
   }
@@ -508,20 +511,271 @@
     if (!DES || DES.fim) return;
     DES.fim = true;
     clearInterval(timerDes); timerDes = null;
+    Object.assign(DES, acenderFoguinho(DES.acertos, DES.total));
+    render();
+    confete();
+  }
+  // registra a rodada do dia; a primeira do dia acende o foguinho
+  function acenderFoguinho(acertos, total) {
     const d = hoje();
     const primeiro = !S.desafios[d];
     const reg = S.desafios[d] || { acertos: 0, total: 0, rodadas: 0 };
-    reg.acertos += DES.acertos; reg.total += DES.total; reg.rodadas++;
+    reg.acertos += acertos; reg.total += total; reg.rodadas++;
     S.desafios[d] = reg;
-    DES.primeiro = primeiro;
+    let ganhouProtetor = false;
     const seq = seqAtual();
     if (primeiro && seq > 0 && seq % 7 === 0 && (S.protetores || 0) < 2) {
       S.protetores = (S.protetores || 0) + 1;
-      DES.ganhouProtetor = true;
+      ganhouProtetor = true;
     }
     salvar();
+    return { primeiro, ganhouProtetor };
+  }
+
+  // ----- ENEM de verdade: provas 2009–2023 (API pública api.enem.dev) -----
+  const API_ENEM = "https://api.enem.dev/v1/exams";
+  const ANOS = Array.from({ length: 15 }, (_, k) => 2009 + k);
+  const POR_RODADA = 3;
+  let EN = null;
+  let enemArea = "mix";
+  let timerEnem = null;
+
+  // A área sai do número da questão (a API às vezes erra a disciplina).
+  // Até 2016: 1-45 Humanas, 46-90 Natureza, 91-135 Linguagens. De 2017 em diante: 1-45 Linguagens, 46-90 Humanas, 91-135 Natureza.
+  function faixaEnem(area, ano) {
+    const novo = ano >= 2017;
+    const ini = { lc: novo ? 1 : 91, ch: novo ? 46 : 1, cn: novo ? 91 : 46, mt: 136 }[area];
+    return [ini, ini + 44];
+  }
+  function areaDaQuestao(ano, i) {
+    return ["lc", "ch", "cn", "mt"].find((a) => { const [x, y] = faixaEnem(a, ano); return i >= x && i <= y; });
+  }
+  const ehLingua = (ano, i) => (ano >= 2017 ? i <= 5 : i >= 91 && i <= 95);
+  function sortearEnem(area, evitar) {
+    S.enem = S.enem || { vistas: {} };
+    for (let k = 0; k < 60; k++) {
+      // provas mais recentes aparecem um pouco mais
+      const ano = Math.random() < 0.6 ? 2015 + Math.floor(Math.random() * 9) : ANOS[Math.floor(Math.random() * ANOS.length)];
+      const [a, b] = faixaEnem(area, ano);
+      const i = a + Math.floor(Math.random() * (b - a + 1));
+      const k2 = ano + "-" + i;
+      if ((ano === 2009 && ehLingua(ano, i)) || S.enem.vistas[k2] || k2 === evitar) continue;
+      return { ano, i };
+    }
+    return null;
+  }
+  async function buscarEnem(ano, i) {
+    let url = `${API_ENEM}/${ano}/questions/${i}`;
+    if (ehLingua(ano, i)) url += "?language=" + (ano === 2011 ? "espanhol" : S.perfil.lingua || "ingles");
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 12000);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const q = await r.json();
+      if (!Array.isArray(q.alternatives) || q.alternatives.length < 2 || !q.correctAlternative) throw new Error("incompleta");
+      q._area = areaDaQuestao(ano, i);
+      return q;
+    } finally { clearTimeout(to); }
+  }
+  async function proximaEnem(area, evitar) {
+    for (let t = 0; t < 4; t++) {
+      const s = sortearEnem(area, evitar);
+      if (!s) return null;
+      try { return await buscarEnem(s.ano, s.i); }
+      catch (e) { if (String(e).includes("429")) await new Promise((r) => setTimeout(r, 2500)); }
+    }
+    throw new Error("sem conexão");
+  }
+  const chaveEnem = (q) => q.year + "-" + q.index;
+
+  // markdown simples da API: imagens, negrito, itálico e parágrafos
+  function md(txt) {
+    if (!txt) return "";
+    let h = esc(String(txt).replace(/[​‌‍]/g, ""));
+    h = h.replace(/!\[[^\]]*\]\((https:\/\/[^)\s]+)\)/g, '<img class="enem-img" src="$1" alt="" loading="lazy">');
+    h = h.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:)]|$)/g, "$1<i>$2</i>");
+    return h.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+  }
+  function htmlQuestaoEnem(q, resp, acao) {
+    const area = AREAS[q._area] || AREAS.lc;
+    const ctx = q.context || "";
+    const extras = (q.files || []).filter((f) => /^https:\/\//.test(f) && !ctx.includes(f)).map((f) => `<img class="enem-img" src="${esc(f)}" alt="" loading="lazy">`).join("");
+    const alts = q.alternatives.map((a) => {
+      let cls = "";
+      if (resp) cls = a.letter === q.correctAlternative ? " certa" : a.letter === resp ? " errada-alt" : " apagada";
+      const corpo = a.file && /^https:\/\//.test(a.file) ? `<img class="enem-img" src="${esc(a.file)}" alt="Alternativa ${a.letter}" loading="lazy">` : esc((a.text || "").replace(/[​‌‍]/g, ""));
+      return `<button class="alt${cls}" ${acao ? `data-acao="${acao}" data-l="${a.letter}"` : ""} ${resp || !acao ? "disabled" : ""}><span class="letra">${a.letter}</span><span>${corpo}</span></button>`;
+    }).join("");
+    return `<div class="card enem-q">
+      <div style="margin-bottom:8px"><span class="chip" style="color:${area.cor}">${area.curto}</span><span class="small muted">ENEM ${q.year} · questão ${q.index}</span></div>
+      <div class="enem-texto">${md(ctx)}${extras}</div>
+      <div class="pergunta enem-enunciado">${md(q.alternativesIntroduction)}</div>
+      <div class="alts">${alts}</div>
+    </div>`;
+  }
+  function promptEnem(q) {
+    const alts = q.alternatives.map((a) => `${a.letter}) ${a.text || "[imagem]"}`).join(" ");
+    const txt = `${q.context || ""} ${q.alternativesIntroduction || ""}`.replace(/!\[[^\]]*\]\([^)]*\)/g, "[imagem]").replace(/\s+/g, " ").trim();
+    return `Estou estudando para o ENEM. Me explica a questão ${q.index} do ENEM ${q.year}, passo a passo e de um jeito simples, e me dá um macete para questões parecidas. Enunciado: ${txt.slice(0, 1400)} Alternativas: ${alts.slice(0, 600)} Gabarito oficial: ${q.correctAlternative}.`;
+  }
+
+  async function carregarEnem() {
+    const en = EN;
+    en.carregando = true; en.erro = null; en.resp = null;
     render();
-    confete();
+    try {
+      const area = en.rod[en.feitos % en.rod.length];
+      let q = null;
+      if (en.prox && en.proxArea === area) q = await en.prox.catch(() => null);
+      if (!q) q = await proximaEnem(area);
+      if (EN !== en) return;
+      if (!q) throw new Error("acabaram");
+      en.q = q;
+      en.inicio = Date.now();
+      en.carregando = false;
+      // já deixa a próxima a caminho
+      const pa = en.rod[(en.feitos + 1) % en.rod.length];
+      en.proxArea = pa;
+      en.prox = proximaEnem(pa, chaveEnem(q));
+      en.prox.catch(() => {});
+    } catch (e) {
+      if (EN !== en) return;
+      en.carregando = false;
+      en.erro = "Não consegui buscar a questão. Confere a internet e tenta de novo.";
+    }
+    if (EN === en && location.hash.startsWith("#enem")) render();
+  }
+  function iniciarEnem() {
+    const rod = enemArea === "mix" ? rodizioAreas().filter((a) => a !== "red") : [enemArea];
+    EN = { rod, feitos: 0, acertos: 0, q: null, resp: null, erradas: [], anotadas: {}, fim: false };
+    clearInterval(timerEnem);
+    timerEnem = setInterval(tickEnem, 1000);
+    carregarEnem();
+  }
+  function tickEnem() {
+    const el = document.getElementById("en-tempo");
+    if (!EN || !el || EN.resp || EN.carregando) return;
+    const s = Math.floor((Date.now() - EN.inicio) / 1000);
+    el.textContent = Math.floor(s / 60) + ":" + pad(s % 60);
+    el.classList.toggle("passou", s > 180);
+  }
+  function responderEnem(letra) {
+    const q = EN && EN.q;
+    if (!q || EN.resp) return;
+    EN.resp = letra;
+    EN.tempo = Math.round((Date.now() - EN.inicio) / 1000);
+    const ok = letra === q.correctAlternative;
+    EN.feitos++;
+    if (ok) EN.acertos++; else EN.erradas.push(q);
+    S.enem = S.enem || { vistas: {} };
+    S.enem.vistas[chaveEnem(q)] = { ok, d: hoje(), a: q._area, t: EN.tempo };
+    salvar({ semCartas: true });
+    render();
+  }
+  function continuarEnem() {
+    if (EN.feitos > 0 && EN.feitos % POR_RODADA === 0 && !EN.fim) {
+      EN.fim = true;
+      clearInterval(timerEnem); timerEnem = null;
+      Object.assign(EN, acenderFoguinho(EN.acertos, EN.feitos));
+      render();
+      confete();
+      return;
+    }
+    carregarEnem();
+  }
+  function anotarEnem(q) {
+    const certa = q.alternatives.find((a) => a.letter === q.correctAlternative) || {};
+    const enun = `${q.alternativesIntroduction || ""}`.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+    S.erros.push({
+      id: uid(), data: hoje(), caixa: 0, proxima: agendar(q._area, 1), dominado: false,
+      area: q._area, topico: "outro", assuntoLivre: `ENEM ${q.year} · questão ${q.index}`,
+      questao: enun.slice(0, 220), motivo: "",
+      licao: `Resposta ${q.correctAlternative}: ${(certa.text || "ver a imagem da alternativa").slice(0, 160)}`,
+      ref: { ano: q.year, i: q.index },
+    });
+    S.contadores.erros = (S.contadores.erros || 0) + 1;
+    salvar();
+  }
+  function statsEnem() {
+    const v = Object.values((S.enem && S.enem.vistas) || {});
+    const por = {};
+    for (const x of v) { por[x.a] = por[x.a] || { n: 0, ok: 0 }; por[x.a].n++; if (x.ok) por[x.a].ok++; }
+    return { n: v.length, ok: v.filter((x) => x.ok).length, por };
+  }
+
+  function telaEnem(arg) {
+    if (!EN) {
+      if (arg && AREAS[arg] && arg !== "red") enemArea = arg;
+      const st = statsEnem();
+      const chips = [["mix", "Misturado"], ["mt", "Matemática"], ["cn", "Natureza"], ["ch", "Humanas"], ["lc", "Linguagens"]]
+        .map(([k, n]) => `<button class="opcao" data-acao="enem-area" data-area="${k}" aria-pressed="${enemArea === k}">${n}</button>`).join("");
+      const ok = !!S.desafios[hoje()];
+      return `${topo("ENEM de verdade", "#hoje")}
+        <div class="card">
+          <p>Questões reais das provas do ENEM de <b>2009 a 2023</b>, com o gabarito oficial. Responda <b>3</b> pra ${ok ? "treinar (o foguinho de hoje já está aceso)" : "acender o foguinho de hoje 🔥"}.</p>
+          <p class="small muted">Tente fazer cada uma em até 3 minutos, o ritmo da prova. O relógio aparece no topo.</p>
+          <label class="campo"><span>Área</span></label>
+          <div class="opcoes" style="margin:-6px 0 14px">${chips}</div>
+          <button class="btn full" data-acao="enem-iniciar">Começar</button>
+          <p class="small muted" style="margin:10px 0 0">Precisa de internet. As questões vêm do acervo público <a href="https://enem.dev" target="_blank" rel="noopener">enem.dev</a>.</p>
+        </div>
+        ${st.n ? `<div class="card"><div class="eyebrow">Seu histórico</div>
+          <p style="margin:6px 0 10px"><b>${st.n}</b> questões reais respondidas · <b>${Math.round((100 * st.ok) / st.n)}%</b> de acerto</p>
+          ${["mt", "cn", "ch", "lc"].filter((a) => st.por[a]).map((a) => `<div class="small" style="margin-bottom:6px">${AREAS[a].nome}: ${st.por[a].ok}/${st.por[a].n}
+            <div class="barrinha"><i style="width:${(100 * st.por[a].ok) / st.por[a].n}%;background:${AREAS[a].cor}"></i></div></div>`).join("")}
+        </div>` : ""}`;
+    }
+    if (EN.fim) {
+      const seq = seqAtual();
+      return `
+        <div class="card" style="text-align:center;margin-top:10px">
+          <div class="chama acesa explode" aria-hidden="true">🔥</div>
+          <h2>${EN.primeiro ? "Foguinho aceso!" : "Mais uma rodada feita!"}</h2>
+          <p style="font-size:20px;margin:6px 0 2px"><b>${plural(seq, "dia", "dias")}</b> ${seq === 1 ? "de foguinho" : "seguidos"}</p>
+          <p class="muted">${EN.acertos} de ${EN.feitos} questões reais do ENEM certas</p>
+          ${EN.ganhouProtetor ? `<p class="aviso" style="margin:12px 0"><b>Ganhou um protetor 🧊</b> Se um dia você não conseguir estudar, ele salva a sequência sozinho.</p>` : ""}
+          ${faixaSemana()}
+        </div>
+        <div class="linha-btns"><button class="btn" data-acao="enem-sair">Voltar pro plano</button><button class="btn ghost" data-acao="enem-mais">Mais 3</button></div>`;
+    }
+    const topoEn = `<div class="des-topo">
+        <button class="icone-btn" data-acao="enem-sair" aria-label="Sair">✕</button>
+        <div class="small muted">Questão ${EN.resp ? ((EN.feitos - 1) % POR_RODADA) + 1 : (EN.feitos % POR_RODADA) + 1} de ${POR_RODADA} · ${EN.acertos} certas</div>
+        <b id="en-tempo" class="mono">0:00</b>
+      </div>`;
+    if (EN.carregando) return `${topoEn}<div class="card vazio"><div class="grande">📝</div>Buscando uma questão do ENEM…</div>`;
+    if (EN.erro) return `${topoEn}<div class="card vazio"><div class="grande">📡</div><p>${esc(EN.erro)}</p><button class="btn" data-acao="enem-tentar">Tentar de novo</button></div>`;
+    const q = EN.q;
+    const certo = EN.resp === q.correctAlternative;
+    const ultima = EN.feitos > 0 && EN.feitos % POR_RODADA === 0;
+    return `${topoEn}
+      ${htmlQuestaoEnem(q, EN.resp, "enem-responder")}
+      ${EN.resp ? `<div class="feedback ${certo ? "ok" : "nao"}">
+        <b>${certo ? "Acertou! 🎉" : "A certa é a " + q.correctAlternative}</b>
+        <p class="small">Você levou ${Math.floor(EN.tempo / 60)}:${pad(EN.tempo % 60)}${EN.tempo > 180 ? " (passou dos 3 min, tudo bem: é treino)" : ""}.</p>
+        <div class="linha-btns">
+          <a class="btn ghost" href="https://chatgpt.com/?q=${encodeURIComponent(promptEnem(q))}" target="_blank" rel="noopener">Explicar</a>
+          ${certo ? "" : EN.anotadas[chaveEnem(q)] ? `<span class="small" style="font-weight:800">✓ No caderno</span>` : `<button class="btn ghost" data-acao="enem-anotar">Anotar no caderno</button>`}
+          <button class="btn" data-acao="enem-continuar">${ultima ? "Ver resultado" : "Próxima"}</button>
+        </div>
+      </div>` : ""}`;
+  }
+
+  // ver de novo uma questão real que foi pro caderno
+  let VER = null;
+  function telaEnemVer(arg) {
+    const [ano, i] = (arg || "").split("-").map(Number);
+    if (!VER || VER.k !== arg) {
+      VER = { k: arg, q: null, erro: null };
+      buscarEnem(ano, i).then((q) => { if (VER && VER.k === arg) { VER.q = q; render(); } })
+        .catch(() => { if (VER && VER.k === arg) { VER.erro = true; render(); } });
+    }
+    const corpo = VER.erro ? `<div class="card vazio">Não consegui carregar. Confere a internet.</div>`
+      : !VER.q ? `<div class="card vazio">Carregando…</div>`
+      : htmlQuestaoEnem(VER.q, VER.q.correctAlternative, null) +
+        `<div class="linha-btns"><a class="btn" href="https://chatgpt.com/?q=${encodeURIComponent(promptEnem(VER.q))}" target="_blank" rel="noopener">Pedir explicação</a></div>`;
+    return `${topo(`ENEM ${ano} · Q${i}`, "#erros")}${corpo}`;
   }
   function anotarQuestao(q) {
     S.erros.push({
@@ -612,6 +866,7 @@
       const acoes = [];
       if (t.ir) acoes.push(`<a class="btn mini" href="${t.ir}">${esc(t.irTxt || "Abrir")}</a>`);
       if (t.link) acoes.push(`<a class="btn mini" href="${esc(t.link)}" target="_blank" rel="noopener">${esc(t.linkTxt || "Abrir")}</a>`);
+      if (t.tipo === "estudo" && t.area !== "red") acoes.push(`<a class="btn mini" href="#enem/${t.area}">ENEM real de ${AREAS[t.area].nome}</a>`);
       if (t.tipo === "estudo" && !feita) acoes.push(`<button class="btn mini" data-acao="trocar" data-id="${t.id}">Trocar assunto</button>`);
       return `<li class="tarefa${feita ? " feita" : ""}">
         <button class="check" data-acao="marcar" data-id="${t.id}" aria-pressed="${feita}" aria-label="Marcar como feito: ${esc(t.titulo)}">${ICO.check}</button>
@@ -665,6 +920,7 @@
         <div class="t-acoes">
           <a class="btn mini" href="https://chatgpt.com/?q=${encodeURIComponent(promptExplicar(e))}" target="_blank" rel="noopener">Explicar (ChatGPT)</a>
           <a class="btn mini" href="https://claude.ai/new?q=${encodeURIComponent(promptExplicar(e))}" target="_blank" rel="noopener">Explicar (Claude)</a>
+          ${e.ref ? `<a class="btn mini" href="#enem-ver/${e.ref.ano}-${e.ref.i}">Ver questão</a>` : ""}
           <a class="btn mini" href="#novo-erro/${e.id}">Editar</a>
         </div>
       </div>`).join("");
@@ -809,6 +1065,17 @@
           </form>` : `<div class="linha-btns"><button class="btn" data-acao="abrir-form" data-form="red">+ Registrar redação</button>${C.redacaoUrl ? `<a class="btn ghost" href="${esc(C.redacaoUrl)}" target="_blank" rel="noopener">Site de redação</a>` : ""}</div>`}
       </div>
 
+      ${(() => {
+        const st = statsEnem();
+        return `<div class="card">
+          <div class="eyebrow">Questões reais do ENEM</div>
+          <h3>${st.n ? `${st.n} respondidas · ${Math.round((100 * st.ok) / st.n)}% de acerto` : "Nenhuma ainda"}</h3>
+          ${["mt", "cn", "ch", "lc"].map((a) => { const x = st.por[a] || { n: 0, ok: 0 }; return `<div class="small" style="margin-bottom:6px">${AREAS[a].nome}: ${x.n ? `${x.ok}/${x.n} (${Math.round((100 * x.ok) / x.n)}%)` : "–"}
+            <div class="barrinha"><i style="width:${x.n ? (100 * x.ok) / x.n : 0}%;background:${AREAS[a].cor}"></i></div></div>`; }).join("")}
+          <div class="linha-btns"><a class="btn" href="#enem">Treinar com provas antigas</a></div>
+        </div>`;
+      })()}
+
       <div class="card">
         <div class="eyebrow">Mapa de assuntos</div>
         <p class="small muted" style="margin:2px 0 10px">● = quanto costuma cair (estimativa de provas anteriores). O quadrado mostra quantas vezes você errou.</p>
@@ -932,6 +1199,8 @@
         <label class="campo" style="margin-top:8px"><span>Nome</span><input type="text" id="a-nome" value="${esc(p.nome)}"></label>
         <label class="campo"><span>Curso dos sonhos</span><input type="text" id="a-curso" value="${esc(p.curso)}" placeholder="ex: Medicina"></label>
         <label class="campo"><span>Nota que você quer</span><input type="text" id="a-meta" value="${esc(p.meta)}" placeholder="ex: 750"></label>
+        <label class="campo"><span>Língua estrangeira da prova</span></label>
+        <div class="opcoes" style="margin:-6px 0 14px">${[["ingles", "Inglês"], ["espanhol", "Espanhol"]].map(([k, n]) => `<button type="button" class="opcao" data-acao="lingua" data-l="${k}" aria-pressed="${(p.lingua || "ingles") === k}">${n}</button>`).join("")}</div>
         <label class="campo"><span>Áreas em que sente mais dificuldade</span></label>
         <div class="opcoes" style="margin:-6px 0 6px">${chips}</div>
         <p class="small muted">O plano do dia puxa mais essas áreas a partir de amanhã.</p>
@@ -1147,6 +1416,29 @@
       location.hash = "#hoje";
     },
     "des-sair-fim"() { DES = null; location.hash = "#hoje"; },
+    "enem-area"(el) { enemArea = el.dataset.area; render(); },
+    "enem-iniciar"() { iniciarEnem(); },
+    "enem-tentar"() { carregarEnem(); },
+    "enem-responder"(el) { responderEnem(el.dataset.l); },
+    "enem-continuar"() { continuarEnem(); },
+    "enem-mais"() { EN.fim = false; EN.acertos = 0; EN.feitos = 0; EN.erradas = []; clearInterval(timerEnem); timerEnem = setInterval(tickEnem, 1000); carregarEnem(); },
+    "enem-anotar"() {
+      if (!EN || !EN.q || EN.anotadas[chaveEnem(EN.q)]) return;
+      anotarEnem(EN.q);
+      EN.anotadas[chaveEnem(EN.q)] = true;
+      render();
+      toast("Foi pro caderno. Volta amanhã na revisão.");
+    },
+    "enem-sair"() {
+      if (EN && !EN.fim && EN.feitos % POR_RODADA !== 0 && !confirm("Se sair agora, essa rodada não conta pro foguinho. Sair mesmo?")) return;
+      EN = null; clearInterval(timerEnem); timerEnem = null;
+      location.hash = "#hoje";
+    },
+    lingua(el) {
+      S.perfil.lingua = el.dataset.l;
+      document.querySelectorAll('[data-acao="lingua"]').forEach((b) => b.setAttribute("aria-pressed", b === el));
+      salvar({ semCartas: true });
+    },
     "trocar-foto"() { document.getElementById("foto-input").click(); },
     "ocultar-instalar"() { S.ocultarInstalar = true; salvar(); render(); },
     "ativar-push"() { ativarPush(); },
@@ -1312,17 +1604,19 @@
   });
 
   // ---------- roteador ----------
-  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
-  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje" };
+  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, enem: telaEnem, "enem-ver": telaEnemVer, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
+  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje", enem: "hoje", "enem-ver": "erros" };
   let rotaAtual = "";
   function render() {
     const [rota, arg] = (location.hash.slice(1) || "hoje").split("/");
     const fn = ROTAS[rota] || telaHoje;
     if (rota !== "revisar") REV = null;
     if (rota !== "desafio" || (rotaAtual !== "desafio" && DES && DES.fim)) { DES = null; clearInterval(timerDes); timerDes = null; }
+    if (rota !== "enem" || (rotaAtual !== "enem" && EN && EN.fim)) { EN = null; clearInterval(timerEnem); timerEnem = null; }
+    if (rota !== "enem-ver") VER = null;
     if (rota !== rotaAtual) formAberto = null;
     rotaAtual = rota;
-    document.body.classList.toggle("modo-desafio", rota === "desafio" && !!DES && !DES.fim);
+    document.body.classList.toggle("modo-desafio", (rota === "desafio" && !!DES && !DES.fim) || (rota === "enem" && !!EN && !EN.fim));
     app.innerHTML = fn(arg);
     const aba = ABA_DE[rota] || rota;
     document.querySelectorAll("nav.abas a").forEach((a) => {
