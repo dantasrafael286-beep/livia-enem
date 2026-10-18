@@ -66,7 +66,7 @@ def mensagem(momento, agora, cfg, agenda, T=None):
     vars_ = {"nome": cfg["nome"], "autor": cfg["autor"], "dias": (alvo - hoje).days, "qual": qual}
     f = lambda s: s.format(**vars_)
     par = lambda k: (f(T[k]["titulo"]), f(T[k]["texto"]))
-    carta_hoje = any(a["data"] == hoje.isoformat() and (momento == "noite" or a.get("hora", "00:00") <= "07:00") for a in agenda)
+    carta_hoje = any(a["data"] == hoje.isoformat() and (momento == "noite" or a.get("hora", "00:00") <= "06:00") for a in agenda)
     extra = " " + f(T["carta_nova"]) if carta_hoje else ""
 
     if hoje > d2 or (hoje == d2 and momento == "noite"):
@@ -92,7 +92,7 @@ def main():
     cfg = ler_config()
     agora = dt.datetime.now(BRT)
     agendado = os.environ.get("AGENDA", "")
-    momento = os.environ.get("MOMENTO") or ("manha" if agendado.startswith("0 10") else "noite" if agendado else ("manha" if agora.hour < 14 else "noite"))
+    momento = os.environ.get("MOMENTO") or ("manha" if agendado.startswith("0 9 ") else "noite" if agendado else ("manha" if agora.hour < 14 else "noite"))
 
     titulo, corpo = (os.environ.get("TITULO") or "").strip(), (os.environ.get("MENSAGEM") or "").strip()
     if not corpo:

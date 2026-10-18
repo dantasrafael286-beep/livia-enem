@@ -2,7 +2,7 @@ name: Lembretes
 
 on:
   schedule:
-    - cron: "0 10 * * *" # 7h em Brasília
+    - cron: "0 9 * * *" # 6h em Brasília
     - cron: "0 23 * * *" # 20h em Brasília
   workflow_dispatch:
     inputs:

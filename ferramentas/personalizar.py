@@ -29,13 +29,13 @@ QUANDO = {
 
 # (chave no lembretes.json, título da seção, tem lista de mensagens?)
 SECOES = [
-    ("bom_dia", "LEMBRETE: BOM DIA (todo dia às 7h)", True),
+    ("bom_dia", "LEMBRETE: BOM DIA (todo dia às 6h)", True),
     ("boa_noite", "LEMBRETE: BOA NOITE (todo dia às 20h)", True),
     ("domingo_simulado", "LEMBRETE: DOMINGO DE SIMULADO (substitui o bom dia nos domingos antes da prova)", False),
     ("carta_nova", "LEMBRETE: CARTA NOVA (vai junto no aviso do dia em que uma carta de data abre)", False),
-    ("vespera_manha", "LEMBRETE: VÉSPERA DA PROVA, MANHÃ (sáb 07/11 e sáb 14/11, 7h)", False),
+    ("vespera_manha", "LEMBRETE: VÉSPERA DA PROVA, MANHÃ (sáb 07/11 e sáb 14/11, 6h)", False),
     ("vespera_noite", "LEMBRETE: VÉSPERA DA PROVA, NOITE (sáb 07/11 e sáb 14/11, 20h)", False),
-    ("prova_manha", "LEMBRETE: DIA DA PROVA, MANHÃ (dom 08/11 e dom 15/11, 7h)", False),
+    ("prova_manha", "LEMBRETE: DIA DA PROVA, MANHÃ (dom 08/11 e dom 15/11, 6h)", False),
     ("fim_dia1", "LEMBRETE: FIM DO 1º DIA (dom 08/11, 20h)", False),
     ("acabou", "LEMBRETE: ACABOU O ENEM (dom 15/11, 20h)", False),
 ]

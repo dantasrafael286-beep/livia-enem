@@ -1218,7 +1218,7 @@
 
       <div class="card">
         <div class="eyebrow">Lembretes no celular</div>
-        <p class="small" style="margin-top:6px">Um "bom dia" com a contagem às 7h e um lembrete às 20h. Também avisa quando chega carta nova por data.</p>
+        <p class="small" style="margin-top:6px">Um "bom dia" com a contagem às 6h e um lembrete às 20h. Também avisa quando chega carta nova por data.</p>
         ${!standalone ? `<p class="small"><b>Primeiro instale o app</b> (no iPhone: Compartilhar → Adicionar à Tela de Início) e abra pelo ícone.</p>` : ""}
         ${S.push && S.push.codigo ? `
           <p class="small">✅ Lembretes ativados neste celular. Agora mande este código pro ${esc(C.autor)} (é só uma vez):</p>
