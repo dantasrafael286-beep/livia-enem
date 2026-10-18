@@ -49,54 +49,43 @@ def escolhe(lista, hoje):
     return lista[hoje.toordinal() % len(lista)]
 
 
-BOM_DIA = [
-    "O plano de hoje já tá pronto no app. Bora?",
-    "Um passo de cada vez. Abre o app e vê o plano de hoje.",
-    "Hoje conta. Começa pela revisão dos erros, são 5 minutinhos.",
-    "Café, água e o plano do dia. Você consegue.",
-    "Constância vence talento. Bora acender o foguinho de hoje 🔥",
-    "Questão fácil primeiro, sempre. Abre o plano de hoje.",
-    "Cada dia estudado é ponto a mais em novembro.",
-]
-BOA_NOITE = [
-    "Já acendeu o foguinho de hoje? São só 3 minutinhos de questões 🔥",
-    "Não deixa o foguinho apagar! 3 minutos e tá feito 🔥",
-    "Antes de dormir: revisou o caderno de erros? 5 minutos e pronto.",
-    "Se estudou hoje, marca no app. Se não deu, tudo bem: amanhã tem plano novo.",
-    "Errou alguma questão hoje? Anota no caderno antes de esquecer.",
-    "Fechou o dia? Descansa, dormir bem também é estudar 💛",
-]
 
 
-def mensagem(momento, agora, cfg, agenda):
-    nome, autor = cfg["nome"], cfg["autor"]
+def ler_textos():
+    # os textos ficam em lembretes.json (editado via privado/PERSONALIZAR.txt)
+    with open(os.path.join(RAIZ, "lembretes.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def mensagem(momento, agora, cfg, agenda, T=None):
+    T = T or ler_textos()
     hoje = agora.date()
     d1 = dt.date.fromisoformat(cfg["prova1"])
     d2 = dt.date.fromisoformat(cfg["prova2"])
+    alvo, qual = (d1, "pro ENEM") if hoje <= d1 else (d2, "pro 2º dia do ENEM")
+    vars_ = {"nome": cfg["nome"], "autor": cfg["autor"], "dias": (alvo - hoje).days, "qual": qual}
+    f = lambda s: s.format(**vars_)
+    par = lambda k: (f(T[k]["titulo"]), f(T[k]["texto"]))
     carta_hoje = any(a["data"] == hoje.isoformat() and (momento == "noite" or a.get("hora", "00:00") <= "07:00") for a in agenda)
-    extra = f" 💌 Tem carta nova do {autor} te esperando." if carta_hoje else ""
+    extra = " " + f(T["carta_nova"]) if carta_hoje else ""
 
     if hoje > d2 or (hoje == d2 and momento == "noite"):
-        if hoje == d2:
-            return "ACABOU!!! 🎉", f"{nome}, você terminou o ENEM. Orgulho demais de você. Abre o app: tem carta nova 💌"
-        return None
+        return par("acabou") if hoje == d2 else None
     if hoje == d1 or hoje == d2:
         if momento == "manha":
-            return "É HOJE! 💪", "Portões: 12h às 13h (horário de Brasília). Documento original com foto + caneta preta transparente." + extra
-        return "1º dia: FEITO ✅", "Descansa hoje. Semana que vem é Natureza e Matemática, e você vai com tudo."
+            t, c = par("prova_manha")
+            return t, c + extra
+        return par("fim_dia1")
     if hoje == d1 - dt.timedelta(days=1) or hoje == d2 - dt.timedelta(days=1):
-        if momento == "manha":
-            return "Amanhã é o dia", "Hoje é leve: separar documento e caneta, conferir o local e dormir cedo." + extra
-        return "Dorme cedo hoje 💛", f"Você está pronta, {nome}. O trabalho já foi feito. Amanhã é só mostrar." + extra
+        t, c = par("vespera_manha" if momento == "manha" else "vespera_noite")
+        return t, c + extra
 
-    alvo, qual = (d1, "pro ENEM") if hoje < d1 else (d2, "pro 2º dia do ENEM")
-    falta = (alvo - hoje).days
     if momento == "manha":
-        corpo = escolhe(BOM_DIA, hoje)
+        corpo = f(escolhe(T["bom_dia"], hoje))
         if hoje.weekday() == 6 and hoje < d1:
-            corpo = "Hoje é dia de simulado no horário real: 13h30. Prepara o lanche!"
-        return f"Bom dia, {nome}! Faltam {falta} dias {qual} ☀️", corpo + extra
-    return f"Faltam {falta} dias {qual}", escolhe(BOA_NOITE, hoje) + extra
+            corpo = f(T["domingo_simulado"])
+        return f(T["bom_dia_titulo"]), corpo + extra
+    return f(T["boa_noite_titulo"]), f(escolhe(T["boa_noite"], hoje)) + extra
 
 
 def main():
