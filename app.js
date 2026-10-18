@@ -170,10 +170,6 @@
       linkTxt: "Achar questões",
     };
   }
-  function competenciaFoco(d) {
-    const comps = TOPICOS.filter((t) => t.area === "red");
-    return escolherTopico(d, ["red"], "red", []) || comps[0];
-  }
 
   function gerarPlano(d) {
     const f = fase(d);
@@ -237,19 +233,6 @@
       t.push(tarefaEstudo("B", b, areasB));
     }
 
-    if (f === "pre1") {
-      if (antevespera) {
-        t.push({ id: "red", tipo: "livre", titulo: "Revisar repertórios e o modelo da proposta de intervenção", det: "Agente, ação, meio, finalidade e detalhamento: os 5 elementos da C5." });
-      } else if ([1, 3, 5].includes(dw)) {
-        const c = competenciaFoco(d);
-        t.push({
-          id: "red", tipo: "redacao",
-          titulo: "Escrever 1 redação (1h cronometrada)",
-          det: `Tema novo. Foco de hoje: ${c.nome} (${c.foco}).`,
-          link: C.redacaoUrl || "", linkTxt: C.redacaoUrl ? "Abrir site de redação" : "",
-        });
-      }
-    }
     return t;
   }
 
@@ -443,8 +426,8 @@
   function rodizioAreas() {
     // ordem das matérias na rodada; as que ela marcou como difíceis aparecem mais
     if (fase(hoje()) === "entre") return ["mt", "cn"]; // entre as provas, só o que falta
-    const r = ["mt", "ch", "cn", "lc", "mt", "cn", "ch", "lc", "red"];
-    for (const a of S.perfil.fracas || []) r.splice(Math.floor(Math.random() * r.length), 0, a);
+    const r = ["mt", "ch", "cn", "lc", "mt", "cn", "ch", "lc"];
+    for (const a of (S.perfil.fracas || []).filter((x) => x !== "red")) r.splice(Math.floor(Math.random() * r.length), 0, a);
     const ini = Math.floor(Math.random() * r.length);
     return r.slice(ini).concat(r.slice(0, ini));
   }
@@ -456,7 +439,7 @@
     let melhor = null, nota = -1;
     for (const q of Q) {
       const t = TOP[q.t];
-      if (!t || usadas.has(q.id)) continue;
+      if (!t || t.area === "red" || usadas.has(q.id)) continue;
       if (temNaArea && t.area !== areaAlvo) continue;
       const st = S.qstats[q.id];
       let p = Math.pow(t.peso, 1.2) * ((S.perfil.fracas || []).includes(t.area) ? 1.3 : 1);
@@ -922,7 +905,6 @@
         <div class="linha-btns"><a class="btn" href="#novo-erro">+ Anotar erro</a>${rev ? `<a class="btn ghost" href="#revisar">Revisar (${rev})</a>` : ""}</div>
       </div>
       ${cartaoProximaCarta()}
-      ${C.redacaoUrl ? `<p class="small muted" style="text-align:center"><a href="${esc(C.redacaoUrl)}" target="_blank" rel="noopener">Site de redação</a></p>` : ""}
       <input type="file" accept="image/*" id="foto-input" class="hide">`;
   }
 
@@ -931,7 +913,7 @@
   function telaErros() {
     const rev = paraRevisar().length;
     const lista = S.erros.filter((e) => filtroArea === "todas" || e.area === filtroArea).slice().reverse();
-    const chips = ["todas", "lc", "ch", "cn", "mt", "red"].map((a) =>
+    const chips = ["todas", "lc", "ch", "cn", "mt"].map((a) =>
       `<button class="opcao" data-acao="filtro-area" data-area="${a}" aria-pressed="${filtroArea === a}">${a === "todas" ? "Todas" : AREAS[a].nome}</button>`).join("");
     const itens = lista.map((e) => `
       <div class="card flat" style="padding:12px 14px">
@@ -962,7 +944,7 @@
   function telaNovoErro(id) {
     const e = id ? S.erros.find((x) => x.id === id) : null;
     const area = e ? e.area : "mt";
-    const chipsArea = ["lc", "ch", "cn", "mt", "red"].map((a) =>
+    const chipsArea = ["lc", "ch", "cn", "mt"].map((a) =>
       `<button type="button" class="opcao" data-acao="form-area" data-area="${a}" aria-pressed="${a === area}">${AREAS[a].nome}</button>`).join("");
     const chipsMotivo = Object.entries(MOTIVOS).map(([k, v]) =>
       `<button type="button" class="opcao" data-acao="form-motivo" data-motivo="${k}" aria-pressed="${e && e.motivo === k}">${v}</button>`).join("");
@@ -1038,7 +1020,7 @@
       <div class="legenda">${["lc", "ch", "cn", "mt"].map((a) => `<span><i style="background:${AREAS[a].cor}"></i>${AREAS[a].nome}${ult[a] !== "" && ult[a] != null ? `: <b>${ult[a]}</b>/45` : ""}</span>`).join("")}</div>`;
   }
   function telaRaiox() {
-    const ranking = TOPICOS.map((t) => ({ t, p: prioridade(t), n: S.erros.filter((e) => e.topico === t.id).length }))
+    const ranking = TOPICOS.filter((t) => t.area !== "red").map((t) => ({ t, p: prioridade(t), n: S.erros.filter((e) => e.topico === t.id).length }))
       .sort((a, b) => b.p - a.p);
     const foco = ranking.slice(0, 5);
     const maxErros = Math.max(1, ...ranking.map((r) => r.n));
@@ -1047,8 +1029,7 @@
       return `<div class="topico"><div><div class="nome">${esc(t.nome)}</div><div class="meta"><span class="pontos" aria-label="Incidência ${t.peso} de 3">${"●".repeat(t.peso)}${"○".repeat(3 - t.peso)}</span> ${t.sub ? esc(t.sub) + " · " : ""}${esc(t.foco)}</div></div>
         <div class="calor" style="background:rgba(191,43,38,${alfa.toFixed(2)})" title="Erros anotados">${n}</div></div>`;
     }).join("");
-    const chips = ["mt", "cn", "ch", "lc", "red"].map((a) => `<button class="opcao" data-acao="raiox-area" data-area="${a}" aria-pressed="${areaRaiox === a}">${AREAS[a].nome}</button>`).join("");
-    const reds = S.redacoes.slice().reverse();
+    const chips = ["mt", "cn", "ch", "lc"].map((a) => `<button class="opcao" data-acao="raiox-area" data-area="${a}" aria-pressed="${areaRaiox === a}">${AREAS[a].nome}</button>`).join("");
 
     return `
       ${topo("Raio-X")}
@@ -1068,24 +1049,12 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 10px">
               ${["lc", "ch", "cn", "mt"].map((a) => `<label class="campo"><span>${AREAS[a].nome}</span><input type="number" inputmode="numeric" min="0" max="45" id="s-${a}" placeholder="0 a 45"></label>`).join("")}
             </div>
-            <label class="campo"><span>Nota da redação <span class="muted">(opcional)</span></span><input type="number" inputmode="numeric" min="0" max="1000" step="20" id="s-red" placeholder="0 a 1000"></label>
             <p class="small muted">Deixe em branco as áreas que você não fez.</p>
             <div class="linha-btns"><button class="btn" type="submit">Salvar simulado</button><button type="button" class="btn ghost" data-acao="fechar-form">Cancelar</button></div>
           </form>` : `<div class="linha-btns"><button class="btn" data-acao="abrir-form" data-form="sim">+ Registrar simulado</button></div>`}
         ${S.simulados.length ? `<details style="margin-top:12px"><summary class="small">Ver/apagar simulados</summary>${S.simulados.map((s) => `<div class="small" style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--linha)"><span>${fmtData(s.data)} · LC ${s.lc ?? "–"} · CH ${s.ch ?? "–"} · CN ${s.cn ?? "–"} · MT ${s.mt ?? "–"}</span><button class="btn mini" data-acao="apagar-sim" data-id="${s.id}">Apagar</button></div>`).join("")}</details>` : ""}
       </div>
 
-      <div class="card">
-        <div class="eyebrow">Redações</div>
-        <h3>${plural(S.redacoes.length, "redação escrita", "redações escritas")}</h3>
-        ${reds.length ? `<div class="small">${reds.slice(0, 6).map((r) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--linha)"><span>${fmtData(r.data)} · ${esc(r.tema || "Sem tema")}</span><b>${r.nota !== "" && r.nota != null ? r.nota : ""}</b></div>`).join("")}</div>` : ""}
-        ${formAberto === "red" ? `
-          <form id="form-red" style="margin-top:12px">
-            <label class="campo"><span>Tema</span><input type="text" id="r-tema" placeholder="ex: Desafios da mobilidade urbana"></label>
-            <label class="campo"><span>Nota <span class="muted">(opcional)</span></span><input type="number" inputmode="numeric" min="0" max="1000" step="20" id="r-nota" placeholder="0 a 1000"></label>
-            <div class="linha-btns"><button class="btn" type="submit">Salvar</button><button type="button" class="btn ghost" data-acao="fechar-form">Cancelar</button></div>
-          </form>` : `<div class="linha-btns"><button class="btn" data-acao="abrir-form" data-form="red">+ Registrar redação</button>${C.redacaoUrl ? `<a class="btn ghost" href="${esc(C.redacaoUrl)}" target="_blank" rel="noopener">Site de redação</a>` : ""}</div>`}
-      </div>
 
       ${(() => {
         const st = statsEnem();
@@ -1211,7 +1180,7 @@
   // ----- Ajustes -----
   function telaAjustes() {
     const p = S.perfil;
-    const chips = ["lc", "ch", "cn", "mt", "red"].map((a) => `<button type="button" class="opcao" data-acao="fraca" data-area="${a}" aria-pressed="${(p.fracas || []).includes(a)}">${AREAS[a].nome}</button>`).join("");
+    const chips = ["lc", "ch", "cn", "mt"].map((a) => `<button type="button" class="opcao" data-acao="fraca" data-area="${a}" aria-pressed="${(p.fracas || []).includes(a)}">${AREAS[a].nome}</button>`).join("");
     const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     const permissao = "Notification" in window ? Notification.permission : "indisponível";
     return `
@@ -1341,10 +1310,6 @@
       const d = hoje(), x = dia(d), id = el.dataset.id;
       const t = planoDe(d).find((k) => k.id === id);
       x.feitas[id] = !x.feitas[id];
-      if (t && t.tipo === "redacao") {
-        S.redacoes = S.redacoes.filter((r) => !(r.origem === "plano" && r.data === d));
-        if (x.feitas[id]) S.redacoes.push({ id: uid(), data: d, tema: "Redação do plano", nota: "", origem: "plano" });
-      }
       salvar();
       render();
       if (x.feitas[id] && planoDe(d).every((k) => x.feitas[k.id])) { confete(); toast("Plano de hoje completo! 🔥"); }
@@ -1593,17 +1558,9 @@
       const s = { id: uid(), data: document.getElementById("s-data").value || hoje(), lc: val("s-lc"), ch: val("s-ch"), cn: val("s-cn"), mt: val("s-mt") };
       if ([s.lc, s.ch, s.cn, s.mt].every((v) => v == null)) { toast("Preencha pelo menos uma área"); return; }
       S.simulados.push(s);
-      const nota = document.getElementById("s-red").value;
-      if (nota !== "") S.redacoes.push({ id: uid(), data: s.data, tema: "Redação do simulado", nota: Number(nota) });
       marcarAtividade();
       formAberto = null;
       salvar(); render(); toast("Simulado registrado!");
-    } else if (f.id === "form-red") {
-      const nota = document.getElementById("r-nota").value;
-      S.redacoes.push({ id: uid(), data: hoje(), tema: document.getElementById("r-tema").value.trim(), nota: nota === "" ? "" : Number(nota) });
-      marcarAtividade();
-      formAberto = null;
-      salvar(); render(); toast("Redação registrada!");
     } else if (f.id === "form-perfil") {
       S.perfil.nome = document.getElementById("a-nome").value.trim() || C.nome;
       S.perfil.curso = document.getElementById("a-curso").value.trim();

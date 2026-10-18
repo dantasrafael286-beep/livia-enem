@@ -107,7 +107,7 @@ window.VERSOS = [
   "Caneta preta, documento e coração tranquilo:\no resto é estudo, e estudo é seu estilo.",
   "Semente não vira árvore de um dia pro outro:\nnota boa também não, mas cresce pouco a pouco.",
   "Cada erro anotado é um erro a menos\nno domingo da prova, de olhos serenos.",
-  "Redação vale mil, cinco vezes duzentos:\nproposta completa e sem rodeios nem lamentos.",
+  "Foguinho aceso todo dia, sem pular nenhum:\nno fim da conta, cada dia vale mais um.",
   "Quem estuda não se perde, quem revisa não esquece:\no mapa tá no caderno, e o caminho aparece.",
   "Cansou? Respira fundo, bebe água, dá um tempo:\nsequência não é corrida, é constância e é alento.",
   "Chute não tira ponto, então nada em branco:\nmarca tudo no fim, com calma e sem tranco.",

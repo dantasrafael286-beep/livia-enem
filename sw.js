@@ -1,5 +1,5 @@
 // Service worker: funciona offline e recebe os lembretes.
-const VERSAO = "missao-enem-v6";
+const VERSAO = "missao-enem-v7";
 const ARQUIVOS = [
   "./", "index.html", "styles.css", "config.js", "data.js", "comum.js", "app.js",
   "questoes/mt.js", "questoes/cn.js", "questoes/ch.js", "questoes/lc.js",
