@@ -301,6 +301,15 @@
         salvar({ semCartas: true });
       }
     }
+    if (PACOTE && !CARTAS && PACOTE.auto) {
+      // sem pergunta secreta: destranca sozinho
+      try {
+        const chave = await Comum.derivar(PACOTE.auto, PACOTE.salt, PACOTE.iter);
+        CARTAS = (await Comum.decifrar(PACOTE, chave)).cartas || [];
+        S.cartas.chave = await Comum.exportar(chave);
+        salvar({ semCartas: true });
+      } catch (e) { /* arquivo corrompido: a aba Cartas mostra a pergunta */ }
+    }
     cartasCarregando = false;
     checarCartas();
     render();

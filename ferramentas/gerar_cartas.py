@@ -44,14 +44,21 @@ def main():
     with open(origem, encoding="utf-8") as f:
         src = json.load(f)
 
-    if not normalizar(src.get("resposta", "")):
-        sys.exit("Falta a resposta da pergunta secreta.")
-
-    # reaproveita o salt se a resposta não mudou, assim o celular dela continua destrancado
-    salt = None
+    antigo = None
     if os.path.exists(SAIDA):
         with open(SAIDA, encoding="utf-8") as f:
             antigo = json.load(f)
+
+    # Sem pergunta secreta: as cartas abrem sozinhas no app. A chave vai junto no
+    # arquivo, então isso só evita que alguém leia as cartas abrindo o JSON no GitHub.
+    auto = None
+    if not normalizar(src.get("resposta", "")):
+        auto = (antigo or {}).get("auto") or secrets.token_urlsafe(24)
+        src["resposta"] = auto
+
+    # reaproveita o salt se a resposta não mudou, assim o celular dela continua destrancado
+    salt = None
+    if antigo:
         try:
             s = base64.b64decode(antigo["salt"])
             AESGCM(chave(src["resposta"], s)).decrypt(base64.b64decode(antigo["iv"]), base64.b64decode(antigo["dados"]), None)
@@ -78,7 +85,7 @@ def main():
     dados = AESGCM(chave(src["resposta"], salt)).encrypt(iv, json.dumps({"cartas": cartas}, ensure_ascii=False).encode(), None)
     pacote = {
         "v": 1,
-        "pergunta": src["pergunta"],
+        "pergunta": "" if auto else src["pergunta"],
         "dica": src.get("dica", ""),
         "salt": b64(salt),
         "iter": ITER,
@@ -87,6 +94,8 @@ def main():
         # só as datas, sem conteúdo: o robô dos lembretes avisa "carta nova" nesses dias
         "agenda": [{"data": c["cond"]["data"], "hora": c["cond"].get("hora", "00:00")} for c in cartas if c["cond"]["tipo"] == "data"],
     }
+    if auto:
+        pacote["auto"] = auto
     with open(SAIDA, "w", encoding="utf-8") as f:
         json.dump(pacote, f, ensure_ascii=False, indent=1)
     print(f"{len(cartas)} cartas cifradas em cartas.enc.json")
