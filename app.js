@@ -498,7 +498,7 @@
     const ok = i === q.c;
     DES.resp = i;
     DES.total++;
-    if (ok) DES.acertos++; else DES.erradas.push(q);
+    if (ok) DES.acertos++; else { DES.erradas.push(q); DES.anotadas[q.id] = anotarQuestao(q); }
     const st = S.qstats[q.id] || { v: 0, a: 0 };
     st.v++; if (ok) st.a++;
     st.u = hoje(); st.e = !ok;
@@ -543,7 +543,7 @@
 
   // ----- ENEM de verdade: provas 2009–2023 (API pública api.enem.dev) -----
   const API_ENEM = "https://api.enem.dev/v1/exams";
-  const ANOS = Array.from({ length: 15 }, (_, k) => 2009 + k);
+  const ANOS = Array.from({ length: 9 }, (_, k) => 2015 + k); // 2015 a 2023 (o acervo aberto vai até 2023)
   const POR_RODADA = 3;
   let EN = null;
   let enemArea = "mix";
@@ -563,12 +563,11 @@
   function sortearEnem(area, evitar) {
     S.enem = S.enem || { vistas: {} };
     for (let k = 0; k < 60; k++) {
-      // provas mais recentes aparecem um pouco mais
-      const ano = Math.random() < 0.6 ? 2015 + Math.floor(Math.random() * 9) : ANOS[Math.floor(Math.random() * ANOS.length)];
+      const ano = ANOS[Math.floor(Math.random() * ANOS.length)];
       const [a, b] = faixaEnem(area, ano);
       const i = a + Math.floor(Math.random() * (b - a + 1));
       const k2 = ano + "-" + i;
-      if ((ano === 2009 && ehLingua(ano, i)) || S.enem.vistas[k2] || k2 === evitar) continue;
+      if (S.enem.vistas[k2] || k2 === evitar) continue;
       return { ano, i };
     }
     return null;
@@ -676,7 +675,7 @@
     EN.tempo = Math.round((Date.now() - EN.inicio) / 1000);
     const ok = letra === q.correctAlternative;
     EN.feitos++;
-    if (ok) EN.acertos++; else EN.erradas.push(q);
+    if (ok) EN.acertos++; else { EN.erradas.push(q); EN.anotadas[chaveEnem(q)] = anotarEnem(q); }
     S.enem = S.enem || { vistas: {} };
     S.enem.vistas[chaveEnem(q)] = { ok, d: hoje(), a: q._area, t: EN.tempo };
     salvar({ semCartas: true });
@@ -694,10 +693,13 @@
     carregarEnem();
   }
   function anotarEnem(q) {
+    const ja = S.erros.find((e) => !e.dominado && e.ref && e.ref.ano === q.year && e.ref.i === q.index);
+    if (ja) return ja.id;
+    const id = uid();
     const certa = q.alternatives.find((a) => a.letter === q.correctAlternative) || {};
     const enun = `${q.alternativesIntroduction || ""}`.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
     S.erros.push({
-      id: uid(), data: hoje(), caixa: 0, proxima: agendar(q._area, 1), dominado: false,
+      id, data: hoje(), caixa: 0, proxima: agendar(q._area, 1), dominado: false,
       area: q._area, topico: "outro", assuntoLivre: `ENEM ${q.year} · questão ${q.index}`,
       questao: enun.slice(0, 220), motivo: "",
       licao: `Resposta ${q.correctAlternative}: ${(certa.text || "ver a imagem da alternativa").slice(0, 160)}`,
@@ -705,6 +707,7 @@
     });
     S.contadores.erros = (S.contadores.erros || 0) + 1;
     salvar();
+    return id;
   }
   function statsEnem() {
     const v = Object.values((S.enem && S.enem.vistas) || {});
@@ -722,7 +725,7 @@
       const ok = !!S.desafios[hoje()];
       return `${topo("ENEM de verdade", "#hoje")}
         <div class="card">
-          <p>Questões reais das provas do ENEM de <b>2009 a 2023</b>, com o gabarito oficial. Responda <b>3</b> pra ${ok ? "treinar (o foguinho de hoje já está aceso)" : "acender o foguinho de hoje 🔥"}.</p>
+          <p>Questões reais das provas do ENEM de <b>2015 a 2023</b>, com o gabarito oficial. Responda <b>3</b> pra ${ok ? "treinar (o foguinho de hoje já está aceso)" : "acender o foguinho de hoje 🔥"}.</p>
           <p class="small muted">Tente fazer cada uma em até 3 minutos, o ritmo da prova. O relógio aparece no topo.</p>
           <label class="campo"><span>Área</span></label>
           <div class="opcoes" style="margin:-6px 0 14px">${chips}</div>
@@ -765,7 +768,7 @@
         <p class="small">Você levou ${Math.floor(EN.tempo / 60)}:${pad(EN.tempo % 60)}${EN.tempo > 180 ? " (passou dos 3 min, tudo bem: é treino)" : ""}.</p>
         <div class="linha-btns">
           <a class="btn ghost" href="https://chatgpt.com/?q=${encodeURIComponent(promptEnem(q))}" target="_blank" rel="noopener">Explicar</a>
-          ${certo ? "" : EN.anotadas[chaveEnem(q)] ? `<span class="small" style="font-weight:800">✓ No caderno</span>` : `<button class="btn ghost" data-acao="enem-anotar">Anotar no caderno</button>`}
+          ${certo ? "" : EN.anotadas[chaveEnem(q)] ? `<span class="small" style="font-weight:800">📒 Foi pro caderno de erros</span><button class="btn mini" data-acao="enem-desfazer">Desfazer</button>` : `<button class="btn ghost" data-acao="enem-anotar">Anotar no caderno</button>`}
           <button class="btn" data-acao="enem-continuar">${ultima ? "Ver resultado" : "Próxima"}</button>
         </div>
       </div>` : ""}`;
@@ -787,12 +790,22 @@
     return `${topo(`ENEM ${ano} · Q${i}`, "#erros")}${corpo}`;
   }
   function anotarQuestao(q) {
+    const ja = S.erros.find((e) => !e.dominado && e.qid === q.id);
+    if (ja) return ja.id;
+    const id = uid();
     S.erros.push({
-      id: uid(), data: hoje(), caixa: 0, proxima: agendar(TOP[q.t].area, 1), dominado: false,
+      id, qid: q.id, data: hoje(), caixa: 0, proxima: agendar(TOP[q.t].area, 1), dominado: false,
       area: TOP[q.t].area, topico: q.t, assuntoLivre: "", questao: q.q, motivo: "", licao: q.e,
     });
     S.contadores.erros = (S.contadores.erros || 0) + 1;
     salvar();
+    return id;
+  }
+  // errou: vai sozinho pro caderno; "Desfazer" tira de lá
+  function desfazerAnotacao(mapa, chave) {
+    S.erros = S.erros.filter((e) => e.id !== mapa[chave]);
+    mapa[chave] = false;
+    salvar({ semCartas: true });
   }
 
   function telaDesafio() {
@@ -803,7 +816,7 @@
           <div class="chama${ok ? " acesa" : ""}" style="font-size:84px" aria-hidden="true">🔥</div>
           <h2>${ok ? "Rodada extra" : "Acenda o foguinho de hoje"}</h2>
           <p>Questões rápidas no estilo ENEM, com a explicação na hora. O relógio pausa enquanto você lê a explicação.</p>
-          <p class="small muted">Complete os 3 minutos pra ${ok ? "treinar mais (o foguinho de hoje já está aceso)" : "acender o foguinho"}. Errou? Um toque manda pro caderno de erros.</p>
+          <p class="small muted">Complete os 3 minutos pra ${ok ? "treinar mais (o foguinho de hoje já está aceso)" : "acender o foguinho"}. Errou? Ela vai sozinha pro caderno de erros e volta na revisão.</p>
           <button class="btn full" data-acao="des-iniciar">Começar</button>
         </div>`;
     }
@@ -847,7 +860,7 @@
       ${DES.resp !== null ? `<div class="feedback ${certo ? "ok" : "nao"}">
         <b>${certo ? "Isso! 🎉" : "Quase! A certa é a " + "ABCDE"[q.c]}</b>
         <p>${esc(q.e)}</p>
-        <div class="linha-btns">${certo ? "" : (DES.anotadas[q.id] ? `<span class="small" style="font-weight:800">✓ No caderno</span>` : `<button class="btn ghost" data-acao="des-anotar" data-id="${esc(q.id)}">Anotar no caderno</button>`)}
+        <div class="linha-btns">${certo ? "" : (DES.anotadas[q.id] ? `<span class="small" style="font-weight:800">📒 Foi pro caderno de erros</span><button class="btn mini" data-acao="des-desfazer" data-id="${esc(q.id)}">Desfazer</button>` : `<button class="btn ghost" data-acao="des-anotar" data-id="${esc(q.id)}">Anotar no caderno</button>`)}
           <button class="btn" data-acao="des-continuar">${DES.resta <= 0 ? "Ver resultado" : "Continuar"}</button></div>
       </div>` : ""}`;
   }
@@ -1414,11 +1427,12 @@
     "des-anotar"(el) {
       const q = (window.QUESTOES || []).find((x) => x.id === el.dataset.id);
       if (!q || !DES || DES.anotadas[q.id]) return;
-      anotarQuestao(q);
-      DES.anotadas[q.id] = true;
+      DES.anotadas[q.id] = anotarQuestao(q);
       render();
       toast("Foi pro caderno. Volta amanhã na revisão.");
     },
+    "des-desfazer"(el) { if (DES) { desfazerAnotacao(DES.anotadas, el.dataset.id); render(); toast("Tirei do caderno."); } },
+    "enem-desfazer"() { if (EN && EN.q) { desfazerAnotacao(EN.anotadas, chaveEnem(EN.q)); render(); toast("Tirei do caderno."); } },
     "des-sair"() {
       if (DES && !DES.fim && !confirm("Se sair agora, essa rodada não conta pro foguinho. Sair mesmo?")) return;
       DES = null;
@@ -1433,8 +1447,7 @@
     "enem-mais"() { EN.fim = false; EN.acertos = 0; EN.feitos = 0; EN.erradas = []; clearInterval(timerEnem); timerEnem = setInterval(tickEnem, 1000); carregarEnem(); },
     "enem-anotar"() {
       if (!EN || !EN.q || EN.anotadas[chaveEnem(EN.q)]) return;
-      anotarEnem(EN.q);
-      EN.anotadas[chaveEnem(EN.q)] = true;
+      EN.anotadas[chaveEnem(EN.q)] = anotarEnem(EN.q);
       render();
       toast("Foi pro caderno. Volta amanhã na revisão.");
     },
