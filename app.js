@@ -66,6 +66,10 @@
       local: "",
       cartas: { chave: null, liberadas: {}, lidas: {} },
       push: null,
+      desafios: {},   // dia -> { acertos, total, rodadas }
+      qstats: {},     // questão -> { v: vistas, a: acertos, u: último dia, e: errou da última vez }
+      protetores: 0,
+      protegidos: {}, // dias salvos por um protetor
       criado: hoje(),
     };
   }
@@ -99,14 +103,28 @@
   }
   const estudou = (d) => { const x = S.dias[d]; return !!x && (!!x.atividade || Object.values(x.feitas || {}).some(Boolean)); };
   function marcarAtividade() { dia(hoje()).atividade = true; }
+
+  // ---------- foguinho (sequência estilo Duolingo) ----------
+  // O foguinho do dia acende quando ela completa o desafio de 3 minutos.
+  const aceso = (d) => !!(S.desafios[d] || S.protegidos[d]);
   function seqAtual() {
     let d = hoje();
-    if (!estudou(d)) d = addDias(d, -1);
+    if (!aceso(d)) d = addDias(d, -1);
     let n = 0;
-    while (estudou(d)) { n++; d = addDias(d, -1); }
+    while (aceso(d)) { n++; d = addDias(d, -1); }
     return n;
   }
-  const diasEstudados = () => Object.keys(S.dias).filter(estudou).length;
+  const diasEstudados = () => Object.keys(S.desafios).length;
+  function aplicarProtetor() {
+    // perdeu só ontem e tem protetor: ele salva a sequência sozinho
+    const ontem = addDias(hoje(), -1);
+    if (!aceso(ontem) && (S.protetores || 0) > 0 && aceso(addDias(ontem, -1))) {
+      S.protegidos[ontem] = true;
+      S.protetores--;
+      salvar({ semCartas: true });
+      setTimeout(() => toast("Seu protetor 🧊 salvou a sequência de ontem!"), 600);
+    }
+  }
 
   // ---------- plano do dia ----------
   function prioridade(t) {
@@ -375,6 +393,202 @@
       <div style="margin-top:8px"><button class="btn mini" data-acao="ocultar-instalar">Já instalei / depois</button></div></div>`;
   }
 
+  function faixaSemana() {
+    // segunda a domingo da semana atual
+    const d = hoje();
+    const seg = addDias(d, -((diaSemana(d) + 6) % 7));
+    const letras = ["S", "T", "Q", "Q", "S", "S", "D"];
+    return `<div class="semana">${letras.map((l, i) => {
+      const k = addDias(seg, i);
+      const est = S.desafios[k] ? "aceso" : S.protegidos[k] ? "protegido" : "";
+      return `<div class="dia-sem ${est}${k === d ? " hoje" : ""}${k > d ? " futuro" : ""}"><span>${l}</span><i>${S.desafios[k] ? "🔥" : S.protegidos[k] ? "🧊" : ""}</i></div>`;
+    }).join("")}</div>`;
+  }
+
+  function cartaoFogo(seq) {
+    const d = hoje();
+    const ok = !!S.desafios[d];
+    const titulo = ok
+      ? `${plural(seq, "dia", "dias")} de foguinho! 🔥`
+      : seq ? `Não deixa apagar: ${plural(seq, "dia", "dias")} seguidos` : "Acenda seu foguinho de hoje";
+    const sub = ok
+      ? "Aceso por hoje. Volta amanhã pra manter a sequência."
+      : "3 minutos de questões rápidas acendem o foguinho do dia.";
+    return `<div class="card fogo-card">
+      <div class="fogo-topo"><div class="chama${ok ? " acesa" : ""}" aria-hidden="true">🔥</div>
+        <div><h3>${titulo}</h3><p class="small muted" style="margin:0">${sub}</p></div></div>
+      ${faixaSemana()}
+      <a class="btn full${ok ? " ghost" : ""}" href="#desafio">${ok ? "Treinar mais 3 min" : "Começar desafio (3 min)"}</a>
+      <div class="small muted fogo-rodape"><span>Recorde: ${plural(Math.max(S.melhorSeq || 0, seq), "dia", "dias")}</span><span>Protetores: ${"🧊".repeat(S.protetores || 0) || "nenhum"}</span></div>
+    </div>`;
+  }
+
+  // ----- Desafio de 3 minutos -----
+  const DURACAO = (PARAMS.get("rapido") ? 12 : 180) * 1000; // ?rapido=1 só para testes
+  let DES = null;
+  let timerDes = null;
+
+  function rodizioAreas() {
+    // ordem das matérias na rodada; as que ela marcou como difíceis aparecem mais
+    if (fase(hoje()) === "entre") return ["mt", "cn"]; // entre as provas, só o que falta
+    const r = ["mt", "ch", "cn", "lc", "mt", "cn", "ch", "lc", "red"];
+    for (const a of S.perfil.fracas || []) r.splice(Math.floor(Math.random() * r.length), 0, a);
+    const ini = Math.floor(Math.random() * r.length);
+    return r.slice(ini).concat(r.slice(0, ini));
+  }
+  function proximaQuestao(usadas, areaAlvo) {
+    const Q = window.QUESTOES || [];
+    const d = hoje();
+    const doPlano = new Set(planoDe(d).filter((t) => t.topico).map((t) => t.topico));
+    const temNaArea = Q.some((q) => TOP[q.t] && TOP[q.t].area === areaAlvo && !usadas.has(q.id));
+    let melhor = null, nota = -1;
+    for (const q of Q) {
+      const t = TOP[q.t];
+      if (!t || usadas.has(q.id)) continue;
+      if (temNaArea && t.area !== areaAlvo) continue;
+      const st = S.qstats[q.id];
+      let p = Math.pow(t.peso, 1.2) * ((S.perfil.fracas || []).includes(t.area) ? 1.3 : 1);
+      if (doPlano.has(q.t)) p *= 1.5;
+      if (!st) p *= 1.6;
+      else if (st.e) p *= diff(st.u, d) >= 1 ? 3 : 0.2; // errou: volta a partir do dia seguinte
+      else p *= diff(st.u, d) < 4 ? 0.05 : 0.5;         // acertou: espaça
+      p *= 0.6 + 0.8 * Math.random();
+      if (p > nota) { nota = p; melhor = q; }
+    }
+    return melhor;
+  }
+
+  function iniciarDesafio() {
+    DES = { usadas: new Set(), q: null, resp: null, resta: DURACAO, ultimo: Date.now(), acertos: 0, total: 0, erradas: [], anotadas: {}, fim: false, rodizio: rodizioAreas() };
+    DES.q = proximaQuestao(DES.usadas, DES.rodizio[0]);
+    if (!DES.q) { DES = null; toast("O banco de questões ainda não carregou."); return; }
+    DES.usadas.add(DES.q.id);
+    clearInterval(timerDes);
+    timerDes = setInterval(tickDesafio, 250);
+    render();
+  }
+  function tickDesafio() {
+    if (!DES || DES.fim) { clearInterval(timerDes); timerDes = null; return; }
+    const agora = Date.now();
+    const dt = Math.min(agora - DES.ultimo, 1000); // app em segundo plano não conta
+    DES.ultimo = agora;
+    if (DES.resp !== null) return; // relógio pausa enquanto ela lê a explicação
+    DES.resta -= dt;
+    if (DES.resta <= 0) { terminarDesafio(); return; }
+    const barra = document.getElementById("des-barra");
+    const txt = document.getElementById("des-tempo");
+    if (barra) barra.style.width = (100 * DES.resta) / DURACAO + "%";
+    if (txt) { const s = Math.ceil(DES.resta / 1000); txt.textContent = Math.floor(s / 60) + ":" + pad(s % 60); }
+  }
+  function responderQuestao(i) {
+    if (!DES || DES.resp !== null) return;
+    const q = DES.q;
+    const ok = i === q.c;
+    DES.resp = i;
+    DES.total++;
+    if (ok) DES.acertos++; else DES.erradas.push(q);
+    const st = S.qstats[q.id] || { v: 0, a: 0 };
+    st.v++; if (ok) st.a++;
+    st.u = hoje(); st.e = !ok;
+    S.qstats[q.id] = st;
+    salvar({ semCartas: true });
+    render();
+  }
+  function continuarDesafio() {
+    if (!DES) return;
+    if (DES.resta <= 0) return terminarDesafio();
+    const alvo = DES.rodizio[DES.total % DES.rodizio.length];
+    let q = proximaQuestao(DES.usadas, alvo);
+    if (!q) { DES.usadas = new Set([DES.q.id]); q = proximaQuestao(DES.usadas, alvo); }
+    DES.q = q; DES.resp = null; DES.ultimo = Date.now();
+    DES.usadas.add(q.id);
+    render();
+  }
+  function terminarDesafio() {
+    if (!DES || DES.fim) return;
+    DES.fim = true;
+    clearInterval(timerDes); timerDes = null;
+    const d = hoje();
+    const primeiro = !S.desafios[d];
+    const reg = S.desafios[d] || { acertos: 0, total: 0, rodadas: 0 };
+    reg.acertos += DES.acertos; reg.total += DES.total; reg.rodadas++;
+    S.desafios[d] = reg;
+    DES.primeiro = primeiro;
+    const seq = seqAtual();
+    if (primeiro && seq > 0 && seq % 7 === 0 && (S.protetores || 0) < 2) {
+      S.protetores = (S.protetores || 0) + 1;
+      DES.ganhouProtetor = true;
+    }
+    salvar();
+    render();
+    confete();
+  }
+  function anotarQuestao(q) {
+    S.erros.push({
+      id: uid(), data: hoje(), caixa: 0, proxima: agendar(TOP[q.t].area, 1), dominado: false,
+      area: TOP[q.t].area, topico: q.t, assuntoLivre: "", questao: q.q, motivo: "", licao: q.e,
+    });
+    S.contadores.erros = (S.contadores.erros || 0) + 1;
+    salvar();
+  }
+
+  function telaDesafio() {
+    if (!DES) {
+      const ok = !!S.desafios[hoje()];
+      return `${topo("Desafio de 3 min", "#hoje")}
+        <div class="card" style="text-align:center">
+          <div class="chama${ok ? " acesa" : ""}" style="font-size:84px" aria-hidden="true">🔥</div>
+          <h2>${ok ? "Rodada extra" : "Acenda o foguinho de hoje"}</h2>
+          <p>Questões rápidas no estilo ENEM, com a explicação na hora. O relógio pausa enquanto você lê a explicação.</p>
+          <p class="small muted">Complete os 3 minutos pra ${ok ? "treinar mais (o foguinho de hoje já está aceso)" : "acender o foguinho"}. Errou? Um toque manda pro caderno de erros.</p>
+          <button class="btn full" data-acao="des-iniciar">Começar</button>
+        </div>`;
+    }
+    if (DES.fim) {
+      const seq = seqAtual();
+      return `
+        <div class="card fim-desafio" style="text-align:center;margin-top:10px">
+          <div class="chama acesa explode" aria-hidden="true">🔥</div>
+          <h2>${DES.primeiro ? "Foguinho aceso!" : "Mais uma rodada feita!"}</h2>
+          <p style="font-size:20px;margin:6px 0 2px"><b>${plural(seq, "dia", "dias")}</b> ${seq === 1 ? "de foguinho" : "seguidos"}</p>
+          <p class="muted">${DES.acertos} de ${DES.total} certas nesta rodada</p>
+          ${DES.ganhouProtetor ? `<p class="aviso" style="margin:12px 0"><b>Ganhou um protetor 🧊</b> Se um dia você não conseguir estudar, ele salva a sequência sozinho.</p>` : ""}
+          ${faixaSemana()}
+        </div>
+        ${DES.erradas.length ? `<div class="card"><div class="eyebrow">Pra não errar de novo</div>
+          ${DES.erradas.map((q) => `<div class="errada"><div class="small"><b>${esc(q.q)}</b></div>
+            <div class="small" style="margin:4px 0 6px">✔ ${esc(q.a[q.c])}. ${esc(q.e)}</div>
+            ${DES.anotadas[q.id] ? `<span class="small" style="color:var(--verde);font-weight:800">✓ No caderno</span>` : `<button class="btn mini" data-acao="des-anotar" data-id="${esc(q.id)}">Anotar no caderno</button>`}</div>`).join("")}
+        </div>` : ""}
+        <div class="linha-btns"><a class="btn" href="#hoje" data-acao="des-sair-fim">Voltar pro plano</a><button class="btn ghost" data-acao="des-iniciar">Mais 3 min</button></div>`;
+    }
+    const q = DES.q, t = TOP[q.t], area = AREAS[t.area];
+    const s = Math.ceil(DES.resta / 1000);
+    const certo = DES.resp === q.c;
+    return `
+      <div class="des-topo">
+        <button class="icone-btn" data-acao="des-sair" aria-label="Sair do desafio">✕</button>
+        <div class="des-trilho"><i id="des-barra" style="width:${(100 * DES.resta) / DURACAO}%"></i></div>
+        <b id="des-tempo" class="mono">${Math.floor(s / 60)}:${pad(s % 60)}</b>
+      </div>
+      <div class="small muted" style="margin:0 0 8px">${DES.acertos} certas · ${DES.total} respondidas</div>
+      <div class="card">
+        <div><span class="chip" style="color:${area.cor}">${area.curto}</span><span class="small muted">${esc(t.nome)}</span></div>
+        <p class="pergunta">${esc(q.q)}</p>
+        <div class="alts">${q.a.map((alt, i) => {
+          let cls = "";
+          if (DES.resp !== null) cls = i === q.c ? " certa" : i === DES.resp ? " errada-alt" : " apagada";
+          return `<button class="alt${cls}" data-acao="des-responder" data-i="${i}" ${DES.resp !== null ? "disabled" : ""}><span class="letra">${"ABCDE"[i]}</span><span>${esc(alt)}</span></button>`;
+        }).join("")}</div>
+      </div>
+      ${DES.resp !== null ? `<div class="feedback ${certo ? "ok" : "nao"}">
+        <b>${certo ? "Isso! 🎉" : "Quase! A certa é a " + "ABCDE"[q.c]}</b>
+        <p>${esc(q.e)}</p>
+        <div class="linha-btns">${certo ? "" : (DES.anotadas[q.id] ? `<span class="small" style="font-weight:800">✓ No caderno</span>` : `<button class="btn ghost" data-acao="des-anotar" data-id="${esc(q.id)}">Anotar no caderno</button>`)}
+          <button class="btn" data-acao="des-continuar">${DES.resta <= 0 ? "Ver resultado" : "Continuar"}</button></div>
+      </div>` : ""}`;
+  }
+
   function telaHoje() {
     const d = hoje();
     const f = fase(d);
@@ -419,9 +633,9 @@
         <div class="topo-txt"><div class="eyebrow">${SEMANA[diaSemana(d)]}, ${fmtData(d)}</div><h1>${saudacao()}, <em>${esc(S.perfil.nome || C.nome)}</em></h1></div>
         <a class="icone-btn" href="#ajustes" aria-label="Ajustes">${ICO.engrenagem}</a>
       </div>
+      ${f === "fim" ? "" : cartaoFogo(seq)}
       <div class="card">
-        <div class="contagem"><div>${contagem}</div>
-          <div class="fogo" title="Dias seguidos estudando"><b>${seq}🔥</b><span>${seq === 1 ? "dia seguido" : "dias seguidos"}</span></div></div>
+        <div class="contagem"><div>${contagem}</div></div>
         <div class="verso">${esc(verso)}</div>
       </div>
       <div class="card">
@@ -916,6 +1130,23 @@
       if (i >= 0) f.splice(i, 1); else f.push(a);
       el.setAttribute("aria-pressed", i < 0);
     },
+    "des-iniciar"() { iniciarDesafio(); },
+    "des-responder"(el) { responderQuestao(Number(el.dataset.i)); },
+    "des-continuar"() { continuarDesafio(); },
+    "des-anotar"(el) {
+      const q = (window.QUESTOES || []).find((x) => x.id === el.dataset.id);
+      if (!q || !DES || DES.anotadas[q.id]) return;
+      anotarQuestao(q);
+      DES.anotadas[q.id] = true;
+      render();
+      toast("Foi pro caderno. Volta amanhã na revisão.");
+    },
+    "des-sair"() {
+      if (DES && !DES.fim && !confirm("Se sair agora, essa rodada não conta pro foguinho. Sair mesmo?")) return;
+      DES = null;
+      location.hash = "#hoje";
+    },
+    "des-sair-fim"() { DES = null; location.hash = "#hoje"; },
     "trocar-foto"() { document.getElementById("foto-input").click(); },
     "ocultar-instalar"() { S.ocultarInstalar = true; salvar(); render(); },
     "ativar-push"() { ativarPush(); },
@@ -1081,15 +1312,17 @@
   });
 
   // ---------- roteador ----------
-  const ROTAS = { hoje: telaHoje, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
-  const ABA_DE = { "novo-erro": "erros", revisar: "erros" };
+  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
+  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje" };
   let rotaAtual = "";
   function render() {
     const [rota, arg] = (location.hash.slice(1) || "hoje").split("/");
     const fn = ROTAS[rota] || telaHoje;
     if (rota !== "revisar") REV = null;
+    if (rota !== "desafio" || (rotaAtual !== "desafio" && DES && DES.fim)) { DES = null; clearInterval(timerDes); timerDes = null; }
     if (rota !== rotaAtual) formAberto = null;
     rotaAtual = rota;
+    document.body.classList.toggle("modo-desafio", rota === "desafio" && !!DES && !DES.fim);
     app.innerHTML = fn(arg);
     const aba = ABA_DE[rota] || rota;
     document.querySelectorAll("nav.abas a").forEach((a) => {
@@ -1109,6 +1342,7 @@
   // virou o dia com o app aberto
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { checarCartas(); render(); } });
 
+  aplicarProtetor();
   render();
   carregarCartas();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

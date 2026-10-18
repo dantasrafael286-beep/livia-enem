@@ -54,12 +54,13 @@ BOM_DIA = [
     "Um passo de cada vez. Abre o app e vê o plano de hoje.",
     "Hoje conta. Começa pela revisão dos erros, são 5 minutinhos.",
     "Café, água e o plano do dia. Você consegue.",
-    "Constância vence talento. Bora manter a sequência 🔥",
+    "Constância vence talento. Bora acender o foguinho de hoje 🔥",
     "Questão fácil primeiro, sempre. Abre o plano de hoje.",
     "Cada dia estudado é ponto a mais em novembro.",
 ]
 BOA_NOITE = [
-    "Já marcou o dia de hoje? Até 20 minutinhos contam pra sequência 🔥",
+    "Já acendeu o foguinho de hoje? São só 3 minutinhos de questões 🔥",
+    "Não deixa o foguinho apagar! 3 minutos e tá feito 🔥",
     "Antes de dormir: revisou o caderno de erros? 5 minutos e pronto.",
     "Se estudou hoje, marca no app. Se não deu, tudo bem: amanhã tem plano novo.",
     "Errou alguma questão hoje? Anota no caderno antes de esquecer.",

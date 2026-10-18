@@ -78,8 +78,8 @@
     switch (c && c.tipo) {
       case "inicio": return "Abre na primeira vez que você entrar";
       case "data": return "Abre em " + fmtData(c.data) + (c.hora && c.hora !== "00:00" ? " às " + fmtHora(c.hora) : "");
-      case "sequencia": return `Abre com ${c.n} dias seguidos de estudo`;
-      case "dias": return `Abre com ${c.n} dias de estudo`;
+      case "sequencia": return `Abre com ${c.n} dias seguidos de foguinho 🔥`;
+      case "dias": return `Abre com ${c.n} foguinhos acesos`;
       case "erros": return `Abre com ${c.n} erros anotados no caderno`;
       case "revisoes": return `Abre com ${c.n} revisões feitas`;
       case "simulados": return c.n == 1 ? "Abre quando você registrar o 1º simulado" : `Abre com ${c.n} simulados registrados`;
