@@ -414,6 +414,7 @@
         <a class="btn${ok ? " ghost" : ""}" href="#desafio">⚡ Rápidas (3 min)</a>
         <a class="btn ghost" href="#enem">📝 3 do ENEM real</a>
       </div>
+      <a class="btn ghost full" href="#livre" style="margin-top:10px">♾️ Treino livre: quantas quiser</a>
       <div class="small muted fogo-rodape"><span>Recorde: ${plural(Math.max(S.melhorSeq || 0, seq), "dia", "dias")}</span><span>Protetores: ${"🧊".repeat(S.protetores || 0) || "nenhum"}</span></div>
     </div>`;
   }
@@ -701,7 +702,7 @@
 
   function telaEnem(arg) {
     if (!EN) {
-      if (arg && AREAS[arg] && arg !== "red") enemArea = arg;
+      if (arg && arg !== argAplicado && AREAS[arg] && arg !== "red") { argAplicado = arg; enemArea = arg; }
       const st = statsEnem();
       const chips = [["mix", "Misturado"], ["mt", "Matemática"], ["cn", "Natureza"], ["ch", "Humanas"], ["lc", "Linguagens"]]
         .map(([k, n]) => `<button class="opcao" data-acao="enem-area" data-area="${k}" aria-pressed="${enemArea === k}">${n}</button>`).join("");
@@ -753,6 +754,157 @@
           <a class="btn ghost" href="https://chatgpt.com/?q=${encodeURIComponent(promptEnem(q))}" target="_blank" rel="noopener">Explicar</a>
           ${certo ? "" : EN.anotadas[chaveEnem(q)] ? `<span class="small" style="font-weight:800">📒 Foi pro caderno de erros</span><button class="btn mini" data-acao="enem-desfazer">Desfazer</button>` : `<button class="btn ghost" data-acao="enem-anotar">Anotar no caderno</button>`}
           <button class="btn" data-acao="enem-continuar">${ultima ? "Ver resultado" : "Próxima"}</button>
+        </div>
+      </div>` : ""}`;
+  }
+
+  // ----- Treino livre: sem rodadas e sem relógio, até ela cansar -----
+  let LV = null;
+  let livreFonte = "enem";
+  let livreArea = "mix";
+  let argAplicado = null; // o atalho da URL vale só uma vez, depois manda o que ela tocar
+
+  function iniciarLivre() {
+    const rod = livreArea === "mix" ? rodizioAreas() : [livreArea];
+    LV = { fonte: livreFonte, rod, feitos: 0, acertos: 0, q: null, resp: null, usadas: new Set(), anotadas: {}, acendeu: false, fim: false };
+    carregarLivre();
+  }
+  async function carregarLivre() {
+    const lv = LV;
+    const area = lv.rod[lv.feitos % lv.rod.length];
+    lv.resp = null;
+    lv.erro = null;
+    if (lv.fonte === "rapidas") {
+      let q = proximaQuestao(lv.usadas, area);
+      if (!q) { lv.usadas = new Set(); q = proximaQuestao(lv.usadas, area); }
+      lv.q = q;
+      if (q) lv.usadas.add(q.id);
+      render();
+      return;
+    }
+    lv.carregando = true;
+    render();
+    try {
+      let q = null;
+      if (lv.prox && lv.proxArea === area) q = await lv.prox.catch(() => null);
+      if (!q) q = await proximaEnem(area);
+      if (LV !== lv) return;
+      if (!q) throw new Error("acabaram");
+      lv.q = q;
+      lv.carregando = false;
+      const pa = lv.rod[(lv.feitos + 1) % lv.rod.length];
+      lv.proxArea = pa;
+      lv.prox = proximaEnem(pa, chaveEnem(q));
+      lv.prox.catch(() => {});
+    } catch (e) {
+      if (LV !== lv) return;
+      lv.carregando = false;
+      lv.erro = "Não consegui buscar a questão. Confere a internet e tenta de novo.";
+    }
+    if (LV === lv && location.hash.startsWith("#livre")) render();
+  }
+  function responderLivre(resp) {
+    const lv = LV, q = lv && lv.q;
+    if (!q || lv.resp !== null) return;
+    lv.resp = resp;
+    lv.feitos++;
+    let ok;
+    if (lv.fonte === "rapidas") {
+      ok = resp === q.c;
+      const st = S.qstats[q.id] || { v: 0, a: 0 };
+      st.v++; if (ok) st.a++; st.u = hoje(); st.e = !ok;
+      S.qstats[q.id] = st;
+      if (!ok) lv.anotadas[q.id] = anotarQuestao(q);
+    } else {
+      ok = resp === q.correctAlternative;
+      S.enem = S.enem || { vistas: {} };
+      S.enem.vistas[chaveEnem(q)] = { ok, d: hoje(), a: q._area };
+      if (!ok) lv.anotadas[chaveEnem(q)] = anotarEnem(q);
+    }
+    if (ok) lv.acertos++;
+    // as 3 primeiras do dia já acendem o foguinho
+    if (lv.feitos === 3 && !lv.acendeu) {
+      lv.acendeu = true;
+      if (!S.desafios[hoje()]) {
+        acenderFoguinho(lv.acertos, lv.feitos);
+        confete();
+        setTimeout(() => toast("🔥 Foguinho aceso! Continua quanto quiser."), 300);
+      }
+    }
+    salvar({ semCartas: true });
+    render();
+  }
+
+  function telaLivre(arg) {
+    if (!LV) {
+      if (arg && arg !== argAplicado) {
+        argAplicado = arg;
+        const [f, a] = arg.split("-");
+        if (f === "enem" || f === "rapidas") livreFonte = f;
+        if (a === "mix" || (AREAS[a] && a !== "red")) livreArea = a;
+      }
+      const chipsF = [["enem", "📝 ENEM real (2015–2023)"], ["rapidas", "⚡ Rápidas, com explicação"]]
+        .map(([k, n]) => `<button class="opcao" data-acao="livre-fonte" data-f="${k}" aria-pressed="${livreFonte === k}">${n}</button>`).join("");
+      const chipsA = [["mix", "Misturado"], ["mt", "Matemática"], ["cn", "Natureza"], ["ch", "Humanas"], ["lc", "Linguagens"]]
+        .map(([k, n]) => `<button class="opcao" data-acao="livre-area" data-area="${k}" aria-pressed="${livreArea === k}">${n}</button>`).join("");
+      return `${topo("Treino livre", "#hoje")}
+        <div class="card">
+          <p>Sem relógio e sem rodada: responde quantas quiser e para quando cansar. As 3 primeiras do dia já acendem o foguinho 🔥</p>
+          <label class="campo"><span>Questões</span></label>
+          <div class="opcoes" style="margin:-6px 0 14px">${chipsF}</div>
+          <label class="campo"><span>Área</span></label>
+          <div class="opcoes" style="margin:-6px 0 14px">${chipsA}</div>
+          <button class="btn full" data-acao="livre-iniciar">Começar</button>
+          <p class="small muted" style="margin:10px 0 0">Errou? Vai sozinha pro caderno de erros. ${livreFonte === "enem" ? "As questões do ENEM real precisam de internet." : ""}</p>
+        </div>`;
+    }
+    if (LV.fim) {
+      const pct = LV.feitos ? Math.round((100 * LV.acertos) / LV.feitos) : 0;
+      const cad = Object.values(LV.anotadas).filter(Boolean).length;
+      return `<div class="card" style="text-align:center;margin-top:10px">
+          <div class="chama${S.desafios[hoje()] ? " acesa" : ""}" style="font-size:72px" aria-hidden="true">🔥</div>
+          <h2>Treino feito!</h2>
+          <p style="font-size:20px;margin:6px 0 2px"><b>${LV.feitos}</b> ${LV.feitos === 1 ? "questão" : "questões"} · <b>${LV.acertos}</b> certas (${pct}%)</p>
+          ${cad ? `<p class="muted">${plural(cad, "foi pro caderno", "foram pro caderno")} pra revisar.</p>` : ""}
+          ${faixaSemana()}
+        </div>
+        <div class="linha-btns"><button class="btn" data-acao="livre-sair">Voltar pro plano</button><button class="btn ghost" data-acao="livre-continuar-treino">Continuar treinando</button></div>`;
+    }
+    const topoLv = `<div class="des-topo">
+        <button class="icone-btn" data-acao="livre-encerrar" aria-label="Encerrar treino">✕</button>
+        <div class="small muted">${LV.feitos} feitas · ${LV.acertos} certas</div>
+        <button class="btn mini" data-acao="livre-encerrar">Encerrar</button>
+      </div>`;
+    if (LV.carregando) return `${topoLv}<div class="card vazio"><div class="grande">📝</div>Buscando uma questão do ENEM…</div>`;
+    if (LV.erro) return `${topoLv}<div class="card vazio"><div class="grande">📡</div><p>${esc(LV.erro)}</p><button class="btn" data-acao="livre-tentar">Tentar de novo</button></div>`;
+    const q = LV.q;
+    if (!q) return `${topoLv}<div class="card vazio">Sem questões dessa área agora.</div>`;
+    const respondida = LV.resp !== null;
+    let corpo, certo, chave, explicacao;
+    if (LV.fonte === "rapidas") {
+      const t = TOP[q.t], area = AREAS[t.area];
+      certo = LV.resp === q.c; chave = q.id;
+      corpo = `<div class="card">
+        <div><span class="chip" style="color:${area.cor}">${area.curto}</span><span class="small muted">${esc(t.nome)}</span></div>
+        <p class="pergunta">${esc(q.q)}</p>
+        <div class="alts">${q.a.map((alt, i) => {
+          let cls = "";
+          if (respondida) cls = i === q.c ? " certa" : i === LV.resp ? " errada-alt" : " apagada";
+          return `<button class="alt${cls}" data-acao="livre-responder" data-r="${i}" ${respondida ? "disabled" : ""}><span class="letra">${"ABCDE"[i]}</span><span>${esc(alt)}</span></button>`;
+        }).join("")}</div></div>`;
+      explicacao = `<p>${esc(q.e)}</p>`;
+    } else {
+      certo = LV.resp === q.correctAlternative; chave = chaveEnem(q);
+      corpo = htmlQuestaoEnem(q, respondida ? LV.resp : null, "livre-responder");
+      explicacao = `<div class="linha-btns" style="margin-top:6px"><a class="btn mini" href="https://chatgpt.com/?q=${encodeURIComponent(promptEnem(q))}" target="_blank" rel="noopener">Pedir explicação</a></div>`;
+    }
+    return `${topoLv}${corpo}
+      ${respondida ? `<div class="feedback ${certo ? "ok" : "nao"}">
+        <b>${certo ? "Isso! 🎉" : "A certa é a " + (LV.fonte === "rapidas" ? "ABCDE"[q.c] : q.correctAlternative)}</b>
+        ${explicacao}
+        <div class="linha-btns">
+          ${certo ? "" : LV.anotadas[chave] ? `<span class="small" style="font-weight:800">📒 Foi pro caderno de erros</span><button class="btn mini" data-acao="livre-desfazer">Desfazer</button>` : `<button class="btn ghost" data-acao="livre-anotar">Anotar no caderno</button>`}
+          <button class="btn" data-acao="livre-proxima">Próxima</button>
         </div>
       </div>` : ""}`;
   }
@@ -871,7 +1023,7 @@
       const acoes = [];
       if (t.ir) acoes.push(`<a class="btn mini" href="${t.ir}">${esc(t.irTxt || "Abrir")}</a>`);
       if (t.link) acoes.push(`<a class="btn mini" href="${esc(t.link)}" target="_blank" rel="noopener">${esc(t.linkTxt || "Abrir")}</a>`);
-      if (t.tipo === "estudo" && t.area !== "red") acoes.push(`<a class="btn mini" href="#enem/${t.area}">ENEM real de ${AREAS[t.area].nome}</a>`);
+      if (t.tipo === "estudo" && t.area !== "red") acoes.push(`<a class="btn mini" href="#livre/enem-${t.area}">ENEM real de ${AREAS[t.area].nome}</a>`);
       if (t.tipo === "estudo" && !feita) acoes.push(`<button class="btn mini" data-acao="trocar" data-id="${t.id}">Trocar assunto</button>`);
       return `<li class="tarefa${feita ? " feita" : ""}">
         <button class="check" data-acao="marcar" data-id="${t.id}" aria-pressed="${feita}" aria-label="Marcar como feito: ${esc(t.titulo)}">${ICO.check}</button>
@@ -1063,7 +1215,7 @@
           <h3>${st.n ? `${st.n} respondidas · ${Math.round((100 * st.ok) / st.n)}% de acerto` : "Nenhuma ainda"}</h3>
           ${["mt", "cn", "ch", "lc"].map((a) => { const x = st.por[a] || { n: 0, ok: 0 }; return `<div class="small" style="margin-bottom:6px">${AREAS[a].nome}: ${x.n ? `${x.ok}/${x.n} (${Math.round((100 * x.ok) / x.n)}%)` : "–"}
             <div class="barrinha"><i style="width:${x.n ? (100 * x.ok) / x.n : 0}%;background:${AREAS[a].cor}"></i></div></div>`; }).join("")}
-          <div class="linha-btns"><a class="btn" href="#enem">Treinar com provas antigas</a></div>
+          <div class="linha-btns"><a class="btn" href="#livre/enem-mix">Treinar com provas antigas</a></div>
         </div>`;
       })()}
 
@@ -1405,6 +1557,30 @@
     },
     "des-sair-fim"() { DES = null; location.hash = "#hoje"; },
     "enem-area"(el) { enemArea = el.dataset.area; render(); },
+    "livre-fonte"(el) { livreFonte = el.dataset.f; render(); },
+    "livre-area"(el) { livreArea = el.dataset.area; render(); },
+    "livre-iniciar"() { iniciarLivre(); },
+    "livre-tentar"() { carregarLivre(); },
+    "livre-responder"(el) { responderLivre(el.dataset.r !== undefined ? Number(el.dataset.r) : el.dataset.l); },
+    "livre-proxima"() { carregarLivre(); },
+    "livre-encerrar"() {
+      if (!LV) return;
+      if (!LV.feitos) { LV = null; location.hash = "#hoje"; return; }
+      LV.fim = true; render(); window.scrollTo(0, 0);
+    },
+    "livre-continuar-treino"() { LV.fim = false; carregarLivre(); },
+    "livre-sair"() { LV = null; location.hash = "#hoje"; },
+    "livre-desfazer"() {
+      if (!LV || !LV.q) return;
+      desfazerAnotacao(LV.anotadas, LV.fonte === "rapidas" ? LV.q.id : chaveEnem(LV.q));
+      render(); toast("Tirei do caderno.");
+    },
+    "livre-anotar"() {
+      if (!LV || !LV.q) return;
+      if (LV.fonte === "rapidas") LV.anotadas[LV.q.id] = anotarQuestao(LV.q);
+      else LV.anotadas[chaveEnem(LV.q)] = anotarEnem(LV.q);
+      render(); toast("Foi pro caderno.");
+    },
     "enem-iniciar"() { iniciarEnem(); },
     "enem-tentar"() { carregarEnem(); },
     "enem-responder"(el) { responderEnem(el.dataset.l); },
@@ -1583,8 +1759,8 @@
   });
 
   // ---------- roteador ----------
-  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, enem: telaEnem, "enem-ver": telaEnemVer, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
-  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje", enem: "hoje", "enem-ver": "erros" };
+  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, enem: telaEnem, livre: telaLivre, "enem-ver": telaEnemVer, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
+  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje", enem: "hoje", livre: "hoje", "enem-ver": "erros" };
   let rotaAtual = "";
   function render() {
     const [rota, arg] = (location.hash.slice(1) || "hoje").split("/");
@@ -1593,9 +1769,11 @@
     if (rota !== "desafio" || (rotaAtual !== "desafio" && DES && DES.fim)) { DES = null; clearInterval(timerDes); timerDes = null; }
     if (rota !== "enem" || (rotaAtual !== "enem" && EN && EN.fim)) { EN = null; clearInterval(timerEnem); timerEnem = null; }
     if (rota !== "enem-ver") VER = null;
+    if (rota !== "livre") LV = null;
+    if (rota !== rotaAtual) argAplicado = null;
     if (rota !== rotaAtual) formAberto = null;
     rotaAtual = rota;
-    document.body.classList.toggle("modo-desafio", (rota === "desafio" && !!DES && !DES.fim) || (rota === "enem" && !!EN && !EN.fim));
+    document.body.classList.toggle("modo-desafio", (rota === "desafio" && !!DES && !DES.fim) || (rota === "enem" && !!EN && !EN.fim) || (rota === "livre" && !!LV && !LV.fim));
     app.innerHTML = fn(arg);
     const aba = ABA_DE[rota] || rota;
     document.querySelectorAll("nav.abas a").forEach((a) => {
