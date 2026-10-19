@@ -1,9 +1,16 @@
 name: Lembretes
 
+# O agendamento grátis do GitHub atrasa ou pula horários. Por isso cada lembrete
+# tem 3 tentativas: a primeira que rodar manda, e as outras veem a marca
+# "já enviado" (guardada no cache do Actions) e não repetem.
 on:
   schedule:
-    - cron: "0 9 * * *" # 6h em Brasília
-    - cron: "0 23 * * *" # 20h em Brasília
+    - cron: "2 9 * * *"   # 6h02 em Brasília
+    - cron: "32 9 * * *"  # 6h32 (reserva)
+    - cron: "2 10 * * *"  # 7h02 (reserva)
+    - cron: "2 23 * * *"  # 20h02
+    - cron: "32 23 * * *" # 20h32 (reserva)
+    - cron: "2 0 * * *"   # 21h02 (reserva)
   workflow_dispatch:
     inputs:
       titulo:
@@ -19,21 +26,45 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   enviar:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - id: quando
+        run: |
+          echo "dia=$(TZ=America/Sao_Paulo date +%F)" >> "$GITHUB_OUTPUT"
+          if [ "$(TZ=America/Sao_Paulo date +%H)" -lt 14 ]; then echo "momento=manha" >> "$GITHUB_OUTPUT"; else echo "momento=noite" >> "$GITHUB_OUTPUT"; fi
+      - id: ja
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: .enviado
+          key: enviado-${{ steps.quando.outputs.dia }}-${{ steps.quando.outputs.momento }}
+          lookup-only: true
+      - if: steps.ja.outputs.cache-hit == 'true'
+        run: echo "Esse lembrete já foi enviado hoje por uma tentativa anterior. Nada a fazer."
+      - if: steps.ja.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+      - if: steps.ja.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pywebpush==2.5.0
-      - run: python ferramentas/lembretes.py
+      - if: steps.ja.outputs.cache-hit != 'true'
+        run: pip install pywebpush==2.5.0
+      - if: steps.ja.outputs.cache-hit != 'true'
+        run: python ferramentas/lembretes.py
         env:
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           PUSH_SUBS: ${{ secrets.PUSH_SUBS }}
-          AGENDA: ${{ github.event.schedule }}
-          MOMENTO: ${{ inputs.momento }}
+          MOMENTO: ${{ inputs.momento || steps.quando.outputs.momento }}
           TITULO: ${{ inputs.titulo }}
           MENSAGEM: ${{ inputs.mensagem }}
+      - if: github.event_name == 'schedule' && steps.ja.outputs.cache-hit != 'true'
+        run: mkdir -p .enviado && date > .enviado/ok
+      - if: github.event_name == 'schedule' && steps.ja.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .enviado
+          key: enviado-${{ steps.quando.outputs.dia }}-${{ steps.quando.outputs.momento }}
