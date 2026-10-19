@@ -132,6 +132,7 @@
     const ativos = todos.filter((e) => !e.dominado).length;
     let p = Math.pow(t.peso, 1.6) * (1 + 0.5 * ativos + 0.15 * todos.length);
     if ((S.perfil.fracas || []).includes(t.area)) p *= 1.35;
+    if (S.diagFraca === t.area) p *= 1.25;
     return p;
   }
   function historico(d, janela) {
@@ -430,6 +431,7 @@
     // ordem das matérias na rodada; as que ela marcou como difíceis aparecem mais
     if (fase(hoje()) === "entre") return ["mt", "cn"]; // entre as provas, só o que falta
     const r = ["mt", "ch", "cn", "lc", "mt", "cn", "ch", "lc"];
+    if (S.diagFraca) r.splice(Math.floor(Math.random() * r.length), 0, S.diagFraca);
     for (const a of (S.perfil.fracas || []).filter((x) => x !== "red")) r.splice(Math.floor(Math.random() * r.length), 0, a);
     const ini = Math.floor(Math.random() * r.length);
     return r.slice(ini).concat(r.slice(0, ini));
@@ -485,6 +487,7 @@
     DES.resp = i;
     DES.total++;
     if (ok) DES.acertos++; else { DES.erradas.push(q); DES.anotadas[q.id] = anotarQuestao(q); }
+    registrarResposta({ fonte: "rapida", area: TOP[q.t].area, t: q.t, ok });
     const st = S.qstats[q.id] || { v: 0, a: 0 };
     st.v++; if (ok) st.a++;
     st.u = hoje(); st.e = !ok;
@@ -510,6 +513,64 @@
     render();
     confete();
   }
+  // ----- Diagnóstico: a cada 30 respostas mostra onde ela tem mais dificuldade -----
+  const DIAG_A_CADA = 30;
+  function dificuldade(q) {
+    // parâmetro b da TRI (quanto maior, mais difícil); só existe para questões oficiais
+    const P = ((window.TRI_PARAMS || {})[q.year] || {})[q._area] || {};
+    const par = P[q.index] || P[q.index + "-" + (S.perfil.lingua || "ingles")];
+    return par ? par[1] : null;
+  }
+  function registrarResposta(r) {
+    S.respostas = S.respostas || [];
+    S.respostas.push(Object.assign({ d: hoje() }, r));
+    if (S.respostas.length > 600) S.respostas.splice(0, S.respostas.length - 600);
+    S.diagTotal = (S.diagTotal || 0) + 1;
+    if (S.diagTotal - (S.diagUltimo || 0) >= DIAG_A_CADA) S.diagPendente = true;
+  }
+  function calcularDiagnostico(lista) {
+    const por = {};
+    for (const r of lista) {
+      por[r.area] = por[r.area] || { n: 0, ok: 0 };
+      por[r.area].n++; if (r.ok) por[r.area].ok++;
+    }
+    const areas = Object.entries(por).filter(([, v]) => v.n >= 3).map(([a, v]) => ({ a, n: v.n, ok: v.ok, pct: Math.round((100 * v.ok) / v.n) })).sort((x, y) => x.pct - y.pct);
+    const assuntos = {};
+    for (const r of lista) if (r.t && !r.ok) assuntos[r.t] = (assuntos[r.t] || 0) + 1;
+    const piores = Object.entries(assuntos).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([t, n]) => ({ t, n }));
+    const faceis = lista.filter((r) => r.b != null && r.b < 1 && !r.ok).length;
+    const tempos = lista.filter((r) => r.seg).map((r) => r.seg);
+    const ritmo = tempos.length >= 3 ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : null;
+    const total = lista.length, certas = lista.filter((r) => r.ok).length;
+    return { areas, piores, faceis, ritmo, total, certas, pior: areas[0] && areas[0].pct < 70 ? areas[0].a : null };
+  }
+  function htmlDiagnostico(dg, titulo) {
+    if (!dg.total) return `<p class="muted">Responda algumas questões que o diagnóstico aparece aqui.</p>`;
+    const dicas = [];
+    if (dg.pior) dicas.push(`<b>${AREAS[dg.pior].nome}</b> é onde você mais está errando agora. O plano do dia vai puxar mais essa área.`);
+    if (dg.piores.length) dicas.push(`Assuntos que mais apareceram nos erros: ${dg.piores.map((x) => `<b>${esc(TOP[x.t] ? TOP[x.t].nome : x.t)}</b> (${x.n})`).join(", ")}.`);
+    if (dg.faceis >= 2) dicas.push(`Você errou <b>${dg.faceis} questões consideradas fáceis</b> pela TRI. Na nota elas pesam muito: pode ser pressa ou falta de atenção, lê o enunciado até o fim.`);
+    if (dg.ritmo != null) dicas.push(dg.ritmo > 210 ? `Seu ritmo nas questões reais está em <b>${Math.floor(dg.ritmo / 60)}min${pad(dg.ritmo % 60)}</b> por questão. Na prova o ideal é uns 3 min: pule as difíceis e volte depois.` : `Seu ritmo nas questões reais está ótimo: <b>${Math.floor(dg.ritmo / 60)}min${pad(dg.ritmo % 60)}</b> por questão.`);
+    if (!dicas.length) dicas.push("Tudo equilibrado! Continua no ritmo que está dando certo. 💪");
+    return `${titulo ? `<h2 style="text-align:center">${titulo}</h2>` : ""}
+      <p style="text-align:center;font-size:18px;margin:4px 0 12px"><b>${dg.certas}</b> de <b>${dg.total}</b> certas (${Math.round((100 * dg.certas) / dg.total)}%)</p>
+      ${dg.areas.map((x) => `<div class="small" style="margin-bottom:8px"><b>${AREAS[x.a].nome}</b>: ${x.ok} de ${x.n} (${x.pct}%)
+        <div class="barrinha"><i style="width:${x.pct}%;background:${AREAS[x.a].cor}"></i></div></div>`).join("")}
+      <ul class="dicas" style="padding-left:20px;margin:12px 0 0">${dicas.map((d) => `<li>${d}</li>`).join("")}</ul>`;
+  }
+  function mostrarDiagnostico() {
+    if (!S.diagPendente || document.querySelector(".modal")) return;
+    const lista = (S.respostas || []).slice(-DIAG_A_CADA);
+    const dg = calcularDiagnostico(lista);
+    S.diagPendente = false;
+    S.diagUltimo = S.diagTotal;
+    S.diagFraca = dg.pior;
+    salvar({ semCartas: true });
+    abrirModal(`<div class="envelope-anim" aria-hidden="true">🩺</div>
+      ${htmlDiagnostico(dg, "Seu raio-x das últimas 30")}
+      <div class="linha-btns">${dg.pior ? `<button class="btn" data-acao="fechar-modal-ir" data-href="#livre/enem-${dg.pior}">Treinar ${AREAS[dg.pior].nome}</button>` : ""}<button class="btn ghost" data-acao="fechar-modal">Fechar</button></div>`);
+  }
+
   // registra a rodada do dia; a primeira do dia acende o foguinho
   function acenderFoguinho(acertos, total) {
     const d = hoje();
@@ -529,7 +590,8 @@
 
   // ----- ENEM de verdade: provas 2009–2023 (API pública api.enem.dev) -----
   const API_ENEM = "https://api.enem.dev/v1/exams";
-  const ANOS = Array.from({ length: 9 }, (_, k) => 2015 + k); // 2015 a 2023 (o acervo aberto vai até 2023)
+  const ANOS = Array.from({ length: 11 }, (_, k) => 2015 + k); // 2015 a 2025 (2024 e 2025 vêm dos PDFs do INEP, ver provas/recentes.js)
+  if (window.TRI_PARAMS && window.TRI_RECENTES) Object.assign(window.TRI_PARAMS, window.TRI_RECENTES);
   const POR_RODADA = 3;
   let EN = null;
   let enemArea = "mix";
@@ -559,6 +621,18 @@
     return null;
   }
   async function buscarEnem(ano, i) {
+    const recentes = (window.PROVAS_RECENTES || {})[ano];
+    if (recentes) {
+      // 2024 e 2025: a questão é a imagem recortada do caderno oficial
+      const lg = ehLingua(ano, i) ? S.perfil.lingua || "ingles" : null;
+      const m = recentes[lg ? i + "-" + lg : String(i)];
+      if (!m || !m.g) throw new Error("incompleta");
+      return {
+        year: ano, index: i, _area: areaDaQuestao(ano, i), _img: m.img, _txt: m.txt || null,
+        context: "", files: [], alternativesIntroduction: "", correctAlternative: m.g,
+        alternatives: ["A", "B", "C", "D", "E"].map((l) => ({ letter: l, text: "" })),
+      };
+    }
     let url = `${API_ENEM}/${ano}/questions/${i}`;
     if (ehLingua(ano, i)) url += "?language=" + (ano === 2011 ? "espanhol" : S.perfil.lingua || "ingles");
     const ctrl = new AbortController();
@@ -602,6 +676,14 @@
       const corpo = a.file && /^https:\/\//.test(a.file) ? `<img class="enem-img" src="${esc(a.file)}" alt="Alternativa ${a.letter}" loading="lazy">` : esc((a.text || "").replace(/[​‌‍]/g, ""));
       return `<button class="alt${cls}" ${acao ? `data-acao="${acao}" data-l="${a.letter}"` : ""} ${resp || !acao ? "disabled" : ""}><span class="letra">${a.letter}</span><span>${corpo}</span></button>`;
     }).join("");
+    if (q._img) {
+      return `<div class="card enem-q">
+        <div style="margin-bottom:8px"><span class="chip" style="color:${area.cor}">${area.curto}</span><span class="small muted">ENEM ${q.year} · questão ${q.index}</span></div>
+        ${q._txt ? `<details class="texto-base" open><summary>Texto-base desta questão</summary><img class="prova-img" src="${esc(q._txt)}" alt="Texto-base" loading="lazy"></details>` : ""}
+        <img class="prova-img" src="${esc(q._img)}" alt="Questão ${q.index} do ENEM ${q.year}">
+        <div class="alts alts-letras">${alts}</div>
+      </div>`;
+    }
     return `<div class="card enem-q">
       <div style="margin-bottom:8px"><span class="chip" style="color:${area.cor}">${area.curto}</span><span class="small muted">ENEM ${q.year} · questão ${q.index}</span></div>
       <div class="enem-texto">${md(ctx)}${extras}</div>
@@ -610,6 +692,7 @@
     </div>`;
   }
   function promptEnem(q) {
+    if (q._img) return `Estou estudando para o ENEM. Me explica a questão ${q.index} do ENEM ${q.year} (caderno azul), passo a passo e de um jeito simples, e me dá um macete para questões parecidas. O gabarito oficial é ${q.correctAlternative}. Se precisar, eu te mando a foto da questão.`;
     const alts = q.alternatives.map((a) => `${a.letter}) ${a.text || "[imagem]"}`).join(" ");
     const txt = `${q.context || ""} ${q.alternativesIntroduction || ""}`.replace(/!\[[^\]]*\]\([^)]*\)/g, "[imagem]").replace(/\s+/g, " ").trim();
     return `Estou estudando para o ENEM. Me explica a questão ${q.index} do ENEM ${q.year}, passo a passo e de um jeito simples, e me dá um macete para questões parecidas. Enunciado: ${txt.slice(0, 1400)} Alternativas: ${alts.slice(0, 600)} Gabarito oficial: ${q.correctAlternative}.`;
@@ -663,6 +746,7 @@
     const ok = letra === q.correctAlternative;
     EN.feitos++;
     if (ok) EN.acertos++; else { EN.erradas.push(q); EN.anotadas[chaveEnem(q)] = anotarEnem(q); }
+    registrarResposta({ fonte: "enem", area: q._area, ok, b: dificuldade(q), seg: EN.tempo });
     S.enem = S.enem || { vistas: {} };
     S.enem.vistas[chaveEnem(q)] = { ok, d: hoje(), a: q._area, t: EN.tempo };
     salvar({ semCartas: true });
@@ -825,6 +909,7 @@
       if (!ok) lv.anotadas[chaveEnem(q)] = anotarEnem(q);
     }
     if (ok) lv.acertos++;
+    registrarResposta(lv.fonte === "rapidas" ? { fonte: "rapida", area: TOP[q.t].area, t: q.t, ok } : { fonte: "enem", area: q._area, ok, b: dificuldade(q) });
     // as 3 primeiras do dia já acendem o foguinho
     if (lv.feitos === 3 && !lv.acendeu) {
       lv.acendeu = true;
@@ -923,7 +1008,7 @@
   };
   const ANOS_SIM = ANOS.slice().reverse();
   let SIM = null; // id do simulado aberto na tela
-  let simAno = 2023, simTipo = "d1", simMapa = false, simCarregando = false, simErro = null, simNovas = 0;
+  let simAno = 2025, simTipo = "d1", simMapa = false, simCarregando = false, simErro = null, simNovas = 0;
   const SIMQ = {}; // questões já baixadas: "ano-i"
   let timerSim = null, simUltimo = 0, simUltimoSalvo = 0, simPrefetch = false;
 
@@ -1050,6 +1135,11 @@
     const res = resultadoSim(sim);
     const reg = { id: uid(), data: hoje(), lc: null, ch: null, cn: null, mt: null, tri: {}, ano: sim.ano, tipo: sim.tipo, origem: "app" };
     for (const [a, r] of Object.entries(res)) { reg[a] = r.acertos; if (r.tri != null) reg.tri[a] = r.tri; }
+    for (const i of sim.ordem) {
+      if (!sim.resp[i] || sim.anuladas[i]) continue;
+      const area = areaDaQuestao(sim.ano, i);
+      registrarResposta({ fonte: "sim", area, ok: sim.resp[i] === sim.gab[i], b: dificuldade({ year: sim.ano, index: i, _area: area }) });
+    }
     S.simulados.push(reg);
     sim.registro = reg.id;
     clearInterval(timerSim); timerSim = null;
@@ -1427,6 +1517,9 @@
     return `
       ${topo("Raio-X")}
       <div class="card">
+        <div class="eyebrow">Diagnóstico das últimas ${Math.min(DIAG_A_CADA, (S.respostas || []).length)} respostas</div>
+        <div style="margin:8px 0 14px">${htmlDiagnostico(calcularDiagnostico((S.respostas || []).slice(-DIAG_A_CADA)))}</div>
+        <p class="small muted" style="margin:0 0 12px">A cada ${DIAG_A_CADA} questões aparece um resumo automático. Faltam ${DIAG_A_CADA - (((S.diagTotal || 0) - (S.diagUltimo || 0)) % DIAG_A_CADA)} pro próximo.</p>
         <div class="eyebrow">Onde focar agora</div>
         <p class="small muted" style="margin:2px 0 10px">Junta o que mais cai no ENEM com o que você mais erra.</p>
         <ol style="margin:0;padding-left:22px">${foco.map(({ t, n }) => `<li style="margin-bottom:6px"><b>${esc(t.nome)}</b> <span class="small muted">· ${AREAS[t.area].nome}${n ? ` · ${plural(n, "erro", "erros")}` : ""}</span></li>`).join("")}</ol>
@@ -1765,6 +1858,7 @@
       render();
     },
     "fechar-modal"() { fecharModal(); },
+    "fechar-modal-ir"(el) { fecharModal(); location.hash = el.dataset.href; },
     checklist(el) {
       const k = el.dataset.chave;
       S.checklist[k] = S.checklist[k] || {};
@@ -2070,6 +2164,8 @@
     abaCartas.querySelector(".bolinha")?.remove();
     const novas = CARTAS ? CARTAS.filter((c) => S.cartas.liberadas[c.id] && !S.cartas.lidas[c.id]).length : 0;
     if (novas) abaCartas.insertAdjacentHTML("beforeend", `<span class="bolinha">${novas}</span>`);
+    const pausa = rota === "hoje" || rota === "raiox" || (rota === "desafio" && DES && DES.fim) || (rota === "enem" && EN && EN.fim) || (rota === "livre" && LV && (LV.fim || LV.resp !== null)) || (rota === "simulado" && !(SIM && S.sims[SIM] && !S.sims[SIM].fim));
+    if (pausa && S.diagPendente) setTimeout(mostrarDiagnostico, 700);
     if (document.getElementById("relogio")) { tickRelogio(); if (!timerRelogio) timerRelogio = setInterval(tickRelogio, 1000); }
   }
   window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });

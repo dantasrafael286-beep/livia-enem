@@ -285,3 +285,12 @@ body.modo-desafio .wrap{padding-bottom:calc(24px + var(--safe-b))}
 .mapa button.resp{background:var(--tinta);color:var(--papel-2)}
 .mapa button.atual{outline:3px solid var(--vermelho);outline-offset:1px}
 .mapa button.anulada{opacity:.35;text-decoration:line-through}
+
+/* ---- provas 2024/2025 (imagem do caderno) ---- */
+.prova-img{display:block;width:100%;height:auto;background:#fff;border:1px solid var(--linha);margin:0 0 12px}
+.texto-base{margin:0 0 10px}
+.texto-base summary{cursor:pointer;font-weight:800;font-size:14px;margin-bottom:8px}
+.alts-letras{flex-direction:row;gap:8px}
+.alts-letras .alt{flex:1;grid-template-columns:1fr;justify-items:center;padding:10px 0}
+.alts-letras .alt .letra{width:34px;height:34px;font-size:16px}
+.alts-letras .alt span:last-child:empty{display:none}
