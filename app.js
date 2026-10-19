@@ -209,6 +209,7 @@
         det: primeiro
           ? "13h30 às 19h: Linguagens + Humanas + Redação, com uma prova antiga do INEP. Depois registre os acertos no Raio-X."
           : "13h30 às 18h30: Natureza + Matemática, com uma prova antiga do INEP. Depois registre os acertos no Raio-X.",
+        ir: "#simulado", irTxt: "Fazer no app (dá pra pausar)",
         link: INEP_PROVAS, linkTxt: "Provas do INEP",
       });
       return t;
@@ -219,6 +220,7 @@
         id: "sim", tipo: "simulado",
         titulo: mt ? "Mini-simulado: 45 questões de Matemática" : "Mini-simulado: 45 questões de Natureza",
         det: "2h30 cronometradas, com uma prova antiga do INEP. Depois anote os erros no caderno.",
+        ir: "#simulado", irTxt: "Fazer no app",
         link: INEP_PROVAS, linkTxt: "Provas do INEP",
       });
       return t;
@@ -589,13 +591,14 @@
     h = h.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:)]|$)/g, "$1<i>$2</i>");
     return h.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
   }
-  function htmlQuestaoEnem(q, resp, acao) {
+  function htmlQuestaoEnem(q, resp, acao, marcada) {
     const area = AREAS[q._area] || AREAS.lc;
     const ctx = q.context || "";
     const extras = (q.files || []).filter((f) => /^https:\/\//.test(f) && !ctx.includes(f)).map((f) => `<img class="enem-img" src="${esc(f)}" alt="" loading="lazy">`).join("");
     const alts = q.alternatives.map((a) => {
       let cls = "";
       if (resp) cls = a.letter === q.correctAlternative ? " certa" : a.letter === resp ? " errada-alt" : " apagada";
+      else if (marcada === a.letter) cls = " marcada";
       const corpo = a.file && /^https:\/\//.test(a.file) ? `<img class="enem-img" src="${esc(a.file)}" alt="Alternativa ${a.letter}" loading="lazy">` : esc((a.text || "").replace(/[​‌‍]/g, ""));
       return `<button class="alt${cls}" ${acao ? `data-acao="${acao}" data-l="${a.letter}"` : ""} ${resp || !acao ? "disabled" : ""}><span class="letra">${a.letter}</span><span>${corpo}</span></button>`;
     }).join("");
@@ -909,6 +912,244 @@
       </div>` : ""}`;
   }
 
+  // ----- Simulado completo (prova real) com pausa e nota pela TRI -----
+  const TIPOS_SIM = {
+    d1: { nome: "1º dia", desc: "Linguagens + Humanas · 90 questões", areas: ["lc", "ch"] },
+    d2: { nome: "2º dia", desc: "Natureza + Matemática · 90 questões", areas: ["cn", "mt"] },
+    lc: { nome: "Só Linguagens", desc: "45 questões", areas: ["lc"] },
+    ch: { nome: "Só Humanas", desc: "45 questões", areas: ["ch"] },
+    cn: { nome: "Só Natureza", desc: "45 questões", areas: ["cn"] },
+    mt: { nome: "Só Matemática", desc: "45 questões", areas: ["mt"] },
+  };
+  const ANOS_SIM = ANOS.slice().reverse();
+  let SIM = null; // id do simulado aberto na tela
+  let simAno = 2023, simTipo = "d1", simMapa = false, simCarregando = false, simErro = null, simNovas = 0;
+  const SIMQ = {}; // questões já baixadas: "ano-i"
+  let timerSim = null, simUltimo = 0, simUltimoSalvo = 0, simPrefetch = false;
+
+  const fmtTempo = (ms) => { const m = Math.floor(ms / 60000); return Math.floor(m / 60) + "h" + pad(m % 60); };
+  function criarSimulado(ano, tipo) {
+    const ordem = [];
+    for (const a of TIPOS_SIM[tipo].areas) { const [x, y] = faixaEnem(a, ano); for (let i = x; i <= y; i++) ordem.push(i); }
+    S.sims = S.sims || {};
+    const id = ano + "-" + tipo;
+    S.sims[id] = { id, ano, tipo, ordem, pos: 0, resp: {}, gab: {}, anuladas: {}, tempo: 0, inicio: hoje(), fim: null, lingua: S.perfil.lingua || "ingles" };
+    salvar({ semCartas: true });
+    return id;
+  }
+  async function questaoSim(sim, pos) {
+    const i = sim.ordem[pos], k = sim.ano + "-" + i;
+    if (SIMQ[k]) return SIMQ[k];
+    const q = await buscarEnem(sim.ano, i);
+    SIMQ[k] = q;
+    sim.gab[i] = q.correctAlternative;
+    return q;
+  }
+  function abrirSim(id) {
+    SIM = id; simMapa = false; simNovas = 0;
+    simUltimo = Date.now();
+    clearInterval(timerSim);
+    timerSim = setInterval(tickSim, 1000);
+    carregarSim();
+  }
+  function carregarSim() {
+    const sim = S.sims[SIM];
+    if (!sim || sim.fim) return render();
+    const i = sim.ordem[sim.pos];
+    if (SIMQ[sim.ano + "-" + i] || sim.anuladas[i]) { simCarregando = false; render(); prefetchSim(sim); return; }
+    simCarregando = true; simErro = null;
+    render();
+    questaoSim(sim, sim.pos).then(() => {
+      simCarregando = false;
+      salvar({ semCartas: true });
+      if (SIM === sim.id) { render(); prefetchSim(sim); }
+    }).catch((e) => {
+      simCarregando = false;
+      // a questão não existe no acervo (anulada ou incompleta): fica de fora da nota
+      if (/404|incompleta/.test(String(e))) { sim.anuladas[i] = true; salvar({ semCartas: true }); }
+      else simErro = "Não consegui buscar a questão. Confere a internet e tenta de novo.";
+      if (SIM === sim.id) render();
+    });
+  }
+  async function prefetchSim(sim) {
+    if (simPrefetch) return;
+    simPrefetch = true;
+    try {
+      for (const p of [sim.pos + 1, sim.pos + 2]) {
+        const i = sim.ordem[p];
+        if (i === undefined || SIMQ[sim.ano + "-" + i] || sim.anuladas[i]) continue;
+        try { await questaoSim(sim, p); } catch (e) { /* tenta de novo quando ela chegar lá */ }
+      }
+    } finally { simPrefetch = false; }
+  }
+  function tickSim() {
+    const sim = SIM && S.sims[SIM];
+    if (!sim || sim.fim) { clearInterval(timerSim); timerSim = null; return; }
+    const agora = Date.now();
+    const dt = Math.min(agora - simUltimo, 2000); // app em segundo plano não conta
+    simUltimo = agora;
+    if (document.hidden) return;
+    sim.tempo += dt;
+    const el = document.getElementById("sim-tempo");
+    if (el) el.textContent = fmtTempo(sim.tempo);
+    if (agora - simUltimoSalvo > 15000) { simUltimoSalvo = agora; salvar({ semCartas: true }); }
+  }
+  function pausarSim() {
+    clearInterval(timerSim); timerSim = null;
+    SIM = null;
+    salvar({ semCartas: true });
+  }
+
+  // TRI: θ por EAP (priori normal padrão, logística de 3 parâmetros, D = 1) e a escala de cada área
+  function notaTRI(ano, area, itens, lingua) {
+    const P = (window.TRI_PARAMS || {})[ano], E = (window.TRI_ESCALA || {})[area];
+    if (!P || !P[area] || !E) return null;
+    const Q = [], logL = [];
+    for (let t = -5; t <= 6.0001; t += 0.025) { Q.push(t); logL.push(-t * t / 2); }
+    let usados = 0;
+    for (const [i, ok] of itens) {
+      const par = P[area][i] || P[area][i + "-" + lingua];
+      if (!par) continue;
+      usados++;
+      const [a, b, c] = par;
+      for (let j = 0; j < Q.length; j++) {
+        let p = c + (1 - c) / (1 + Math.exp(-a * (Q[j] - b)));
+        p = Math.min(Math.max(p, 1e-12), 1 - 1e-12);
+        logL[j] += ok ? Math.log(p) : Math.log(1 - p);
+      }
+    }
+    if (usados < 10) return null;
+    const mx = Math.max(...logL);
+    let s = 0, sq = 0;
+    for (let j = 0; j < Q.length; j++) { const w = Math.exp(logL[j] - mx); s += w; sq += Q[j] * w; }
+    return Math.round((E[0] * (sq / s) + E[1]) * 10) / 10;
+  }
+  if (PARAMS.get("debug")) window.__notaTRI = notaTRI; // só para testes
+  function resultadoSim(sim) {
+    const por = {};
+    for (const i of sim.ordem) {
+      if (sim.anuladas[i]) continue;
+      const a = areaDaQuestao(sim.ano, i);
+      por[a] = por[a] || { itens: [], acertos: 0, total: 0, respondidas: 0 };
+      const r = sim.resp[i];
+      const ok = !!r && r === sim.gab[i];
+      por[a].itens.push([i, ok]);
+      por[a].total++;
+      if (r) por[a].respondidas++;
+      if (ok) por[a].acertos++;
+    }
+    for (const a of Object.keys(por)) por[a].tri = notaTRI(sim.ano, a, por[a].itens, sim.lingua);
+    return por;
+  }
+  function finalizarSim() {
+    const sim = S.sims[SIM];
+    if (!sim) return;
+    const faltam = sim.ordem.filter((i) => !sim.anuladas[i] && !sim.resp[i]).length;
+    if (!confirm(faltam ? `Ainda tem ${faltam} sem resposta (contam como erro, igual na prova). Finalizar mesmo?` : "Finalizar o simulado e ver a nota?")) return;
+    sim.fim = hoje();
+    const res = resultadoSim(sim);
+    const reg = { id: uid(), data: hoje(), lc: null, ch: null, cn: null, mt: null, tri: {}, ano: sim.ano, tipo: sim.tipo, origem: "app" };
+    for (const [a, r] of Object.entries(res)) { reg[a] = r.acertos; if (r.tri != null) reg.tri[a] = r.tri; }
+    S.simulados.push(reg);
+    sim.registro = reg.id;
+    clearInterval(timerSim); timerSim = null;
+    salvar();
+    render();
+    confete();
+  }
+  function anotarRef(ano, i, letra) {
+    if (S.erros.some((e) => !e.dominado && e.ref && e.ref.ano === ano && e.ref.i === i)) return false;
+    const area = areaDaQuestao(ano, i);
+    S.erros.push({
+      id: uid(), data: hoje(), caixa: 0, proxima: agendar(area, 1), dominado: false,
+      area, topico: "outro", assuntoLivre: `ENEM ${ano} · questão ${i}`, questao: "Do simulado", motivo: "",
+      licao: `Resposta ${letra}. Toque em "Ver questão" pra rever.`, ref: { ano, i },
+    });
+    S.contadores.erros = (S.contadores.erros || 0) + 1;
+    return true;
+  }
+
+  function telaSimulado() {
+    const sim = SIM && S.sims[SIM];
+    if (!sim) {
+      const sims = Object.values(S.sims || {});
+      const andamento = sims.filter((x) => !x.fim);
+      const feitos = sims.filter((x) => x.fim).reverse();
+      const atual = (S.sims || {})[simAno + "-" + simTipo];
+      const chipsAno = ANOS_SIM.map((a) => `<button class="opcao" data-acao="sim-ano" data-ano="${a}" aria-pressed="${simAno === a}">${a}</button>`).join("");
+      const chipsTipo = Object.entries(TIPOS_SIM).map(([k, t]) => `<button class="opcao" data-acao="sim-tipo" data-tipo="${k}" aria-pressed="${simTipo === k}">${t.nome}</button>`).join("");
+      const linha = (x) => {
+        const res = x.fim ? resultadoSim(x) : null;
+        const resp = x.ordem.filter((i) => x.resp[i]).length;
+        return `<div class="topico"><div><div class="nome">ENEM ${x.ano} · ${TIPOS_SIM[x.tipo].nome}</div>
+          <div class="meta">${x.fim ? Object.entries(res).map(([a, r]) => `${AREAS[a].curto} ${r.tri != null ? `<b>${Math.round(r.tri)}</b>` : `${r.acertos}/${r.total}`}`).join(" · ") : `${resp} de ${x.ordem.length} respondidas · ${fmtTempo(x.tempo)}`}</div></div>
+          <button class="btn mini" data-acao="sim-abrir" data-id="${x.id}">${x.fim ? "Ver" : "Continuar"}</button></div>`;
+      };
+      return `${topo("Simulado", "#hoje")}
+        ${andamento.length ? `<div class="card"><div class="eyebrow">Em andamento</div><div class="topicos" style="margin-top:8px">${andamento.map(linha).join("")}</div></div>` : ""}
+        <div class="card">
+          <div class="eyebrow">Novo simulado</div>
+          <p style="margin-top:6px">Prova real do ENEM, igual ao dia da prova: o gabarito só aparece no final. <b>Pode pausar quando quiser</b> e continuar depois, até em outro dia. A nota sai pela <b>TRI</b>, com os parâmetros oficiais do INEP.</p>
+          <label class="campo"><span>Prova</span></label>
+          <div class="opcoes" style="margin:-6px 0 14px">${chipsAno}</div>
+          <label class="campo"><span>O que fazer</span></label>
+          <div class="opcoes" style="margin:-6px 0 6px">${chipsTipo}</div>
+          <p class="small muted" style="margin:0 0 12px">${TIPOS_SIM[simTipo].desc}${simTipo === "d1" ? " (sem redação)" : ""}. Na prova de verdade: ${simTipo === "d1" ? "5h30 com a redação" : simTipo === "d2" ? "5h" : "~2h30"}.</p>
+          ${atual && !atual.fim
+            ? `<button class="btn full" data-acao="sim-abrir" data-id="${atual.id}">Continuar de onde parou</button>`
+            : atual ? `<div class="linha-btns"><button class="btn" data-acao="sim-abrir" data-id="${atual.id}">Ver resultado</button><button class="btn ghost" data-acao="sim-refazer">Refazer</button></div>`
+            : `<button class="btn full" data-acao="sim-comecar">Começar</button>`}
+          <p class="small muted" style="margin:10px 0 0">Precisa de internet pra carregar as questões.</p>
+        </div>
+        ${feitos.length ? `<div class="card"><div class="eyebrow">Feitos</div><div class="topicos" style="margin-top:8px">${feitos.map(linha).join("")}</div></div>` : ""}`;
+    }
+
+    if (sim.fim) {
+      const res = resultadoSim(sim);
+      const erradas = sim.ordem.filter((i) => sim.resp[i] && sim.gab[i] && sim.resp[i] !== sim.gab[i]);
+      const notas = Object.values(res).map((r) => r.tri).filter((n) => n != null);
+      const media = notas.length ? Math.round(notas.reduce((a, b) => a + b, 0) / notas.length) : null;
+      return `${topo(`ENEM ${sim.ano} · ${TIPOS_SIM[sim.tipo].nome}`, "#simulado")}
+        <div class="card" style="text-align:center">
+          <div class="eyebrow">Nota pela TRI</div>
+          ${media != null ? `<div class="contagem" style="display:block"><div class="num">${media}</div><div class="muted">${notas.length > 1 ? "média das áreas" : AREAS[Object.keys(res)[0]].nome} · ${fmtTempo(sim.tempo)} de prova</div></div>` : ""}
+        </div>
+        <div class="card">${Object.entries(res).map(([a, r]) => `
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--linha)">
+            <span><span class="chip" style="color:${AREAS[a].cor}">${AREAS[a].curto}</span>${AREAS[a].nome}<br><span class="small muted">${r.acertos} de ${r.total} certas${r.respondidas < r.total ? ` · ${r.total - r.respondidas} em branco` : ""}</span></span>
+            <b style="font-family:'Alfa Slab One',serif;font-size:26px">${r.tri != null ? Math.round(r.tri) : "–"}</b>
+          </div>`).join("")}
+          <p class="small muted" style="margin:10px 0 0">Calculada com os parâmetros oficiais de cada questão (microdados do INEP) e o mesmo método da nota do ENEM. Por isso acertar questão fácil vale mais do que acertar difícil no chute.</p>
+        </div>
+        ${erradas.length ? `<div class="card"><div class="eyebrow">${plural(erradas.length, "questão errada", "questões erradas")}</div>
+          <div class="t-acoes" style="margin-top:8px">${erradas.slice(0, 60).map((i) => `<a class="btn mini" href="#enem-ver/${sim.ano}-${i}">Q${i}</a>`).join("")}</div>
+          <div class="linha-btns"><button class="btn" data-acao="sim-erros">Mandar os erros pro caderno</button></div></div>` : ""}
+        <div class="linha-btns"><a class="btn ghost" href="#simulado" data-acao="sim-lista">Voltar</a></div>`;
+    }
+
+    const total = sim.ordem.length, i = sim.ordem[sim.pos];
+    const respondidas = sim.ordem.filter((x) => sim.resp[x]).length;
+    const ultimo = sim.pos === total - 1;
+    const topoSim = `<div class="des-topo">
+        <button class="icone-btn" data-acao="sim-pausar" aria-label="Pausar">⏸</button>
+        <div class="small muted">Questão ${sim.pos + 1} de ${total} · ${respondidas} respondidas</div>
+        <b id="sim-tempo" class="mono">${fmtTempo(sim.tempo)}</b>
+      </div>`;
+    const nav = `<div class="linha-btns sim-nav">
+        <button class="btn ghost" data-acao="sim-ir" data-d="-1" ${sim.pos === 0 ? "disabled" : ""}>← Anterior</button>
+        <button class="btn ghost" data-acao="sim-mapa">${simMapa ? "Fechar mapa" : "Mapa"}</button>
+        ${ultimo ? `<button class="btn" data-acao="sim-finalizar">Finalizar</button>` : `<button class="btn" data-acao="sim-ir" data-d="1">Próxima →</button>`}
+      </div>
+      ${simMapa ? `<div class="card"><div class="mapa">${sim.ordem.map((x, p) => `<button class="${sim.resp[x] ? "resp" : ""}${p === sim.pos ? " atual" : ""}${sim.anuladas[x] ? " anulada" : ""}" data-acao="sim-pular" data-p="${p}">${x}</button>`).join("")}</div>
+        <div class="linha-btns"><button class="btn" data-acao="sim-finalizar">Finalizar simulado</button></div></div>` : ""}`;
+    let corpo;
+    if (sim.anuladas[i]) corpo = `<div class="card vazio"><div class="grande">🚫</div>A questão ${i} não está no acervo (foi anulada ou está incompleta). Ela fica de fora da nota.</div>`;
+    else if (simErro) corpo = `<div class="card vazio"><div class="grande">📡</div><p>${esc(simErro)}</p><button class="btn" data-acao="sim-tentar">Tentar de novo</button></div>`;
+    else if (simCarregando || !SIMQ[sim.ano + "-" + i]) corpo = `<div class="card vazio"><div class="grande">📝</div>Carregando a questão ${i}…</div>`;
+    else corpo = htmlQuestaoEnem(SIMQ[sim.ano + "-" + i], null, "sim-marcar", sim.resp[i]);
+    return `${topoSim}${simMapa ? nav : ""}${corpo}${simMapa ? "" : nav}`;
+  }
+
   // ver de novo uma questão real que foi pro caderno
   let VER = null;
   function telaEnemVer(arg) {
@@ -1054,7 +1295,7 @@
         <div class="eyebrow">Plano de hoje</div>
         <h3 style="margin-top:2px">${f === "pre1" || f === "entre" ? "Bora, um passo de cada vez" : "Hoje é diferente"}</h3>
         <ul class="tarefas">${itens.join("")}</ul>
-        <div class="linha-btns"><a class="btn" href="#novo-erro">+ Anotar erro</a>${rev ? `<a class="btn ghost" href="#revisar">Revisar (${rev})</a>` : ""}</div>
+        <div class="linha-btns"><a class="btn" href="#novo-erro">+ Anotar erro</a><a class="btn ghost" href="#simulado">📝 Simulado</a>${rev ? `<a class="btn ghost" href="#revisar">Revisar (${rev})</a>` : ""}</div>
       </div>
       ${cartaoProximaCarta()}
       <input type="file" accept="image/*" id="foto-input" class="hide">`;
@@ -1203,8 +1444,8 @@
             </div>
             <p class="small muted">Deixe em branco as áreas que você não fez.</p>
             <div class="linha-btns"><button class="btn" type="submit">Salvar simulado</button><button type="button" class="btn ghost" data-acao="fechar-form">Cancelar</button></div>
-          </form>` : `<div class="linha-btns"><button class="btn" data-acao="abrir-form" data-form="sim">+ Registrar simulado</button></div>`}
-        ${S.simulados.length ? `<details style="margin-top:12px"><summary class="small">Ver/apagar simulados</summary>${S.simulados.map((s) => `<div class="small" style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--linha)"><span>${fmtData(s.data)} · LC ${s.lc ?? "–"} · CH ${s.ch ?? "–"} · CN ${s.cn ?? "–"} · MT ${s.mt ?? "–"}</span><button class="btn mini" data-acao="apagar-sim" data-id="${s.id}">Apagar</button></div>`).join("")}</details>` : ""}
+          </form>` : `<div class="linha-btns"><a class="btn" href="#simulado">Fazer simulado no app</a><button class="btn ghost" data-acao="abrir-form" data-form="sim">+ Registrar feito no papel</button></div>`}
+        ${S.simulados.length ? `<details style="margin-top:12px"><summary class="small">Ver/apagar simulados</summary>${S.simulados.map((s) => `<div class="small" style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--linha)"><span>${fmtData(s.data)}${s.ano ? ` · ENEM ${s.ano}` : ""} · ${["lc", "ch", "cn", "mt"].filter((a) => s[a] != null).map((a) => `${AREAS[a].curto} ${s[a]}${s.tri && s.tri[a] != null ? ` (TRI ${Math.round(s.tri[a])})` : ""}`).join(" · ")}</span><button class="btn mini" data-acao="apagar-sim" data-id="${s.id}">Apagar</button></div>`).join("")}</details>` : ""}
       </div>
 
 
@@ -1557,6 +1798,47 @@
     },
     "des-sair-fim"() { DES = null; location.hash = "#hoje"; },
     "enem-area"(el) { enemArea = el.dataset.area; render(); },
+    "sim-ano"(el) { simAno = Number(el.dataset.ano); render(); },
+    "sim-tipo"(el) { simTipo = el.dataset.tipo; render(); },
+    "sim-comecar"() { abrirSim(criarSimulado(simAno, simTipo)); },
+    "sim-refazer"() {
+      if (!confirm("Começar esta prova de novo? O resultado anterior continua no gráfico do Raio-X.")) return;
+      abrirSim(criarSimulado(simAno, simTipo));
+    },
+    "sim-abrir"(el) {
+      const x = S.sims[el.dataset.id];
+      if (!x) return;
+      if (x.fim) { SIM = x.id; render(); window.scrollTo(0, 0); } else abrirSim(x.id);
+    },
+    "sim-marcar"(el) {
+      const sim = S.sims[SIM], i = sim.ordem[sim.pos];
+      const antes = sim.resp[i];
+      if (antes === el.dataset.l) delete sim.resp[i]; else sim.resp[i] = el.dataset.l;
+      if (!antes) {
+        simNovas++;
+        if (simNovas === 3 && !S.desafios[hoje()]) { acenderFoguinho(0, 0); confete(); setTimeout(() => toast("🔥 Foguinho aceso! Continua o simulado."), 300); }
+      }
+      salvar({ semCartas: true });
+      render();
+    },
+    "sim-ir"(el) {
+      const sim = S.sims[SIM];
+      sim.pos = Math.max(0, Math.min(sim.ordem.length - 1, sim.pos + Number(el.dataset.d)));
+      simMapa = false; simErro = null;
+      carregarSim(); window.scrollTo(0, 0);
+    },
+    "sim-pular"(el) { const sim = S.sims[SIM]; sim.pos = Number(el.dataset.p); simMapa = false; simErro = null; carregarSim(); window.scrollTo(0, 0); },
+    "sim-mapa"() { simMapa = !simMapa; render(); },
+    "sim-tentar"() { simErro = null; carregarSim(); },
+    "sim-finalizar"() { finalizarSim(); window.scrollTo(0, 0); },
+    "sim-pausar"() { pausarSim(); toast("Simulado pausado. Continua quando quiser."); render(); window.scrollTo(0, 0); },
+    "sim-lista"() { SIM = null; render(); window.scrollTo(0, 0); },
+    "sim-erros"() {
+      const sim = S.sims[SIM];
+      const n = sim.ordem.filter((i) => sim.resp[i] && sim.gab[i] && sim.resp[i] !== sim.gab[i]).map((i) => anotarRef(sim.ano, i, sim.gab[i])).filter(Boolean).length;
+      salvar();
+      toast(n ? `${plural(n, "questão foi", "questões foram")} pro caderno` : "Já estavam no caderno");
+    },
     "livre-fonte"(el) { livreFonte = el.dataset.f; render(); },
     "livre-area"(el) { livreArea = el.dataset.area; render(); },
     "livre-iniciar"() { iniciarLivre(); },
@@ -1759,8 +2041,8 @@
   });
 
   // ---------- roteador ----------
-  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, enem: telaEnem, livre: telaLivre, "enem-ver": telaEnemVer, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
-  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje", enem: "hoje", livre: "hoje", "enem-ver": "erros" };
+  const ROTAS = { hoje: telaHoje, desafio: telaDesafio, enem: telaEnem, livre: telaLivre, simulado: telaSimulado, "enem-ver": telaEnemVer, erros: telaErros, "novo-erro": telaNovoErro, revisar: telaRevisar, raiox: telaRaiox, cartas: telaCartas, prova: telaProva, ajustes: telaAjustes };
+  const ABA_DE = { "novo-erro": "erros", revisar: "erros", desafio: "hoje", enem: "hoje", livre: "hoje", simulado: "hoje", "enem-ver": "erros" };
   let rotaAtual = "";
   function render() {
     const [rota, arg] = (location.hash.slice(1) || "hoje").split("/");
@@ -1770,10 +2052,11 @@
     if (rota !== "enem" || (rotaAtual !== "enem" && EN && EN.fim)) { EN = null; clearInterval(timerEnem); timerEnem = null; }
     if (rota !== "enem-ver") VER = null;
     if (rota !== "livre") LV = null;
+    if (rota !== "simulado" && SIM) { if (S.sims[SIM] && !S.sims[SIM].fim) pausarSim(); else SIM = null; }
     if (rota !== rotaAtual) argAplicado = null;
     if (rota !== rotaAtual) formAberto = null;
     rotaAtual = rota;
-    document.body.classList.toggle("modo-desafio", (rota === "desafio" && !!DES && !DES.fim) || (rota === "enem" && !!EN && !EN.fim) || (rota === "livre" && !!LV && !LV.fim));
+    document.body.classList.toggle("modo-desafio", (rota === "desafio" && !!DES && !DES.fim) || (rota === "enem" && !!EN && !EN.fim) || (rota === "livre" && !!LV && !LV.fim) || (rota === "simulado" && !!SIM && S.sims[SIM] && !S.sims[SIM].fim));
     app.innerHTML = fn(arg);
     const aba = ABA_DE[rota] || rota;
     document.querySelectorAll("nav.abas a").forEach((a) => {
