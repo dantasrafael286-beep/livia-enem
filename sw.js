@@ -1,5 +1,5 @@
 // Service worker: funciona offline e recebe os lembretes.
-const VERSAO = "missao-enem-v8";
+const VERSAO = "missao-enem-v9";
 const ARQUIVOS = [
   "./", "index.html", "styles.css", "config.js", "data.js", "comum.js", "app.js",
   "questoes/mt.js", "questoes/cn.js", "questoes/ch.js", "questoes/lc.js",
@@ -33,8 +33,9 @@ self.addEventListener("fetch", (e) => {
   }
   if (url.origin !== location.origin) return;
   // arquivos do app: rede primeiro (pega atualizações), cache se estiver offline
+  // no-cache: sempre confere com o servidor (o GitHub Pages manda guardar por 10 min)
   e.respondWith(
-    fetch(req).then((res) => {
+    fetch(req, { cache: "no-cache" }).then((res) => {
       if (res.ok) { const cp = res.clone(); caches.open(VERSAO).then((c) => c.put(req, cp)); }
       return res;
     }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match("index.html")))
