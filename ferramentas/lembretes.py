@@ -105,8 +105,8 @@ def main():
 
     subs = assinaturas(os.environ.get("PUSH_SUBS"))
     if not subs:
-        print("Nenhum código em PUSH_SUBS ainda. Nada enviado.")
-        return
+        # falha de propósito: aparece ❌ no Actions em vez de um "sucesso" que não mandou nada
+        sys.exit("Nenhum código no secret PUSH_SUBS: cole o código que o app gera (ENEM:...) em Settings > Secrets > Actions.")
     chave = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
     if not chave:
         sys.exit("Falta o secret VAPID_PRIVATE_KEY.")
