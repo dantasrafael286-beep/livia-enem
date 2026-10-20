@@ -118,7 +118,8 @@ def main():
         try:
             webpush(
                 subscription_info=sub,
-                data=json.dumps({"title": titulo, "body": corpo, "url": "./#hoje"}, ensure_ascii=False),
+                # tag única: uma notificação nova não apaga a anterior que ela ainda não viu
+                data=json.dumps({"title": titulo, "body": corpo, "url": "./#hoje", "tag": f"m{int(agora.timestamp())}"}, ensure_ascii=False),
                 vapid_private_key=vapid,
                 vapid_claims={"sub": "https://github.com"},
                 ttl=6 * 3600,
