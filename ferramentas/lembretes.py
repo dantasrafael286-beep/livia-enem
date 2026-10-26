@@ -45,6 +45,12 @@ def assinaturas(bruto):
     return subs
 
 
+def erro(msg):
+    # "::error::" vira anotação pública no Actions: dá para ver o motivo sem abrir o log
+    print(f"::error::{msg}")
+    sys.exit(1)
+
+
 def escolhe(lista, hoje):
     return lista[hoje.toordinal() % len(lista)]
 
@@ -103,14 +109,27 @@ def main():
         titulo, corpo = msg
     titulo = titulo or "Missão ENEM"
 
-    subs = assinaturas(os.environ.get("PUSH_SUBS"))
+    # os códigos dos aparelhos ficam só no secret (não vão para o repositório público)
+    subs = list({s["endpoint"]: s for s in assinaturas(os.environ.get("PUSH_SUBS"))}.values())
     if not subs:
-        # falha de propósito: aparece ❌ no Actions em vez de um "sucesso" que não mandou nada
-        sys.exit("Nenhum código no secret PUSH_SUBS: cole o código que o app gera (ENEM:...) em Settings > Secrets > Actions.")
+        # falha de propósito, com o motivo visível nas anotações do Actions
+        erro("Falta o secret PUSH_SUBS: cole o código ENEM:... do app em Settings > Secrets and variables > Actions.")
     chave = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
     if not chave:
-        sys.exit("Falta o secret VAPID_PRIVATE_KEY.")
-    vapid = Vapid.from_raw(chave.encode())
+        erro("Falta o secret VAPID_PRIVATE_KEY (Settings > Secrets and variables > Actions).")
+    try:
+        vapid = Vapid.from_raw(chave.encode())
+        from cryptography.hazmat.primitives import serialization
+        pub = vapid.public_key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        pub = base64.urlsafe_b64encode(pub).rstrip(b"=").decode()
+    except Exception as e:
+        erro(f"VAPID_PRIVATE_KEY inválida ({type(e).__name__}): copie de novo a linha de privado/VAPID_PRIVATE_KEY.txt.")
+    publica = re.search(r'vapidPublica:\s*"([^"]+)"', open(os.path.join(RAIZ, "config.js"), encoding="utf-8").read()).group(1)
+    if pub != publica:
+        erro("VAPID_PRIVATE_KEY não combina com a chave pública do app (config.js): copie de novo a de privado/VAPID_PRIVATE_KEY.txt.")
+    if os.environ.get("TESTE"):
+        print(f"::notice::Teste ok: {len(subs)} aparelho(s) cadastrado(s) e chave VAPID certa. Nada foi enviado.")
+        return
 
     print(f"[{agora:%d/%m %H:%M}] {momento}: {titulo} | {corpo}")
     falhas = 0
@@ -130,8 +149,9 @@ def main():
             status = getattr(e.response, "status_code", "?")
             dica = " (código expirou: gere de novo no app)" if status in (404, 410) else ""
             print(f"  aparelho {i}: falhou, status {status}{dica}")
+            print(f"::warning::aparelho {i}: envio recusado, status {status}{dica}")
     if falhas == len(subs):
-        sys.exit(1)
+        erro("Nenhum aparelho recebeu (veja os avisos acima).")
 
 
 if __name__ == "__main__":

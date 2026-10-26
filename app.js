@@ -513,6 +513,57 @@
     render();
     confete();
   }
+  // ----- Progresso para mandar pro Rafael (WhatsApp) -----
+  function resumoProgresso() {
+    const area = {};
+    const soma = (a, ok, n = 1) => { area[a] = area[a] || { n: 0, ok: 0 }; area[a].n += n; area[a].ok += ok; };
+    for (const [id, st] of Object.entries(S.qstats || {})) {
+      const q = (window.QUESTOES || []).find((x) => x.id === id);
+      if (q && TOP[q.t] && TOP[q.t].area !== "red") soma(TOP[q.t].area, st.a || 0, st.v || 0);
+    }
+    for (const v of Object.values((S.enem && S.enem.vistas) || {})) if (v.a) soma(v.a, v.ok ? 1 : 0);
+    for (const sim of Object.values(S.sims || {})) {
+      for (const i of sim.ordem) if (sim.resp[i] && sim.gab[i]) soma(areaDaQuestao(sim.ano, i), sim.resp[i] === sim.gab[i] ? 1 : 0);
+    }
+    const total = Object.values(area).reduce((t, x) => t + x.n, 0);
+    const certas = Object.values(area).reduce((t, x) => t + x.ok, 0);
+    const pct = (ok, n) => (n ? Math.round((100 * ok) / n) + "%" : "–");
+    const semana = (S.respostas || []).filter((r) => r.d >= addDias(hoje(), -6)).length;
+    const seq = seqAtual();
+    const fogos = Object.keys(S.desafios || {}).length;
+    const linhas = [
+      `📊 Progresso da ${S.perfil.nome || C.nome} no Missão ENEM (${fmtData(hoje())})`,
+      "",
+      `🔥 Foguinho: ${plural(seq, "dia seguido", "dias seguidos")} (recorde ${S.melhorSeq || seq}) · ${plural(fogos, "dia aceso", "dias acesos")} no total`,
+      `❓ Questões: ${total} respondidas · ${pct(certas, total)} de acerto${semana ? ` · ${semana} nos últimos 7 dias` : ""}`,
+    ];
+    const areas = ["mt", "cn", "ch", "lc"].filter((a) => area[a]);
+    if (areas.length) linhas.push("   " + areas.map((a) => `${AREAS[a].nome} ${pct(area[a].ok, area[a].n)} (${area[a].n})`).join(" · "));
+    const sims = (S.simulados || []).filter((x) => x.origem === "app");
+    if (sims.length) {
+      const u = sims[sims.length - 1];
+      const notas = Object.entries(u.tri || {}).map(([a, n]) => `${AREAS[a].curto} ${Math.round(n)}`).join(" · ");
+      linhas.push(`📝 Simulados: ${sims.length} · último: ENEM ${u.ano}${notas ? ` · TRI ${notas}` : ""} (${fmtData(u.data)})`);
+    } else if ((S.simulados || []).length) linhas.push(`📝 Simulados registrados: ${S.simulados.length}`);
+    const abertos = Object.values(S.sims || {}).filter((x) => !x.fim).length;
+    if (abertos) linhas.push(`⏸ ${plural(abertos, "simulado pausado", "simulados pausados")} pra terminar`);
+    linhas.push(`📒 Caderno de erros: ${plural(S.erros.length, "erro anotado", "erros anotados")} · ${paraRevisar().length} pra revisar hoje · ${plural(S.contadores.revisoes || 0, "revisão feita", "revisões feitas")}`);
+    const dg = calcularDiagnostico((S.respostas || []).slice(-DIAG_A_CADA));
+    if (dg.pior) linhas.push(`🩺 Onde está mais difícil agora: ${AREAS[dg.pior].nome}`);
+    if (CARTAS) linhas.push(`💌 Cartas abertas: ${CARTAS.filter((c) => S.cartas.liberadas[c.id]).length} de ${CARTAS.length}`);
+    const d = hoje(), alvo = d <= D1 ? D1 : D2;
+    if (d <= D2) linhas.push(`⏳ Faltam ${plural(diff(d, alvo), "dia", "dias")} pro ${alvo === D1 ? "1º" : "2º"} dia do ENEM`);
+    return linhas.join("\n");
+  }
+  function abrirProgresso() {
+    const txt = resumoProgresso();
+    abrirModal(`<div class="envelope-anim" aria-hidden="true">📊</div>
+      <h2 style="text-align:center">Seu progresso</h2>
+      <p class="muted small" style="text-align:center">É isso que vai pro ${esc(C.autor)}:</p>
+      <pre class="resumo-progresso">${esc(txt)}</pre>
+      <div class="linha-btns"><button class="btn" data-acao="enviar-progresso">Mandar pro ${esc(C.autor)}</button><button class="btn ghost" data-acao="fechar-modal">Agora não</button></div>`);
+  }
+
   // ----- Diagnóstico: a cada 30 respostas mostra onde ela tem mais dificuldade -----
   const DIAG_A_CADA = 30;
   function dificuldade(q) {
@@ -1516,6 +1567,7 @@
 
     return `
       ${topo("Raio-X")}
+      <button class="btn full" data-acao="progresso" style="margin-bottom:16px">📊 Mandar meu progresso pro ${esc(C.autor)}</button>
       <div class="card">
         <div class="eyebrow">Diagnóstico das últimas ${Math.min(DIAG_A_CADA, (S.respostas || []).length)} respostas</div>
         <div style="margin:8px 0 14px">${htmlDiagnostico(calcularDiagnostico((S.respostas || []).slice(-DIAG_A_CADA)))}</div>
@@ -1697,6 +1749,12 @@
       </div>
 
       <div class="card">
+        <div class="eyebrow">Progresso</div>
+        <p class="small" style="margin-top:6px">Manda um resumo do que você já fez (foguinho, questões, simulados, erros) pro ${esc(C.autor)} pelo WhatsApp.</p>
+        <div class="linha-btns"><button class="btn" data-acao="progresso">📊 Mandar meu progresso pro ${esc(C.autor)}</button></div>
+      </div>
+
+      <div class="card">
         <div class="eyebrow">Cópia de segurança</div>
         <p class="small" style="margin-top:6px">Tudo fica salvo no seu celular. De vez em quando, salve uma cópia (pra trocar de celular ou se apagar algo).</p>
         <div class="linha-btns"><button class="btn" data-acao="exportar">Salvar cópia</button><label class="btn ghost" style="cursor:pointer">Restaurar cópia<input type="file" accept="application/json,.json" id="importar" class="hide"></label></div>
@@ -1858,6 +1916,13 @@
       render();
     },
     "fechar-modal"() { fecharModal(); },
+    progresso() { abrirProgresso(); },
+    async "enviar-progresso"() {
+      const texto = resumoProgresso();
+      if (navigator.share) { try { await navigator.share({ text: texto }); fecharModal(); return; } catch (e) { if (e.name === "AbortError") return; } }
+      try { await navigator.clipboard.writeText(texto); toast("Copiado! Cola no WhatsApp do " + C.autor + "."); }
+      catch (e) { window.open("https://wa.me/?text=" + encodeURIComponent(texto), "_blank"); }
+    },
     "fechar-modal-ir"(el) { fecharModal(); location.hash = el.dataset.href; },
     checklist(el) {
       const k = el.dataset.chave;

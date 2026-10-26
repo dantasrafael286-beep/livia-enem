@@ -11,6 +11,12 @@ on:
     - cron: "2 23 * * *"  # 20h02
     - cron: "32 23 * * *" # 20h32 (reserva)
     - cron: "2 0 * * *"   # 21h02 (reserva)
+  # ao mudar o robô, roda só um autoteste (confere secrets e chave, não envia nada)
+  push:
+    branches: [main]
+    paths:
+      - "ferramentas/lembretes.py"
+      - ".github/workflows/lembretes.yml"
   workflow_dispatch:
     inputs:
       titulo:
@@ -59,6 +65,7 @@ jobs:
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           PUSH_SUBS: ${{ secrets.PUSH_SUBS }}
           MOMENTO: ${{ inputs.momento || steps.quando.outputs.momento }}
+          TESTE: ${{ github.event_name == 'push' && '1' || '' }}
           TITULO: ${{ inputs.titulo }}
           MENSAGEM: ${{ inputs.mensagem }}
       - if: github.event_name == 'schedule' && steps.ja.outputs.cache-hit != 'true'
