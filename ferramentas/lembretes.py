@@ -2,7 +2,7 @@
 
 Variáveis de ambiente:
   VAPID_PRIVATE_KEY  chave privada (GitHub Secret)
-  PUSH_SUBS          códigos "ENEM:..." que o app gera, um por linha (GitHub Secret)
+  PUSH_SUBS          códigos "ENEM:..." que o app gera, um por linha (GitHub Secret; nunca no repo)
   MOMENTO            "manha" ou "noite" (automático pelo horário agendado)
   TITULO / MENSAGEM  opcional: manda uma mensagem sua no lugar da automática
 """
