@@ -113,7 +113,7 @@ def main():
     subs = list({s["endpoint"]: s for s in assinaturas(os.environ.get("PUSH_SUBS"))}.values())
     if not subs:
         # falha de propósito, com o motivo visível nas anotações do Actions
-        erro("Falta o secret PUSH_SUBS: cole o código ENEM:... do app em Settings > Secrets and variables > Actions.")
+        print("::error::Falta o secret PUSH_SUBS: cole o código ENEM:... do app em Settings > Secrets and variables > Actions.")
     chave = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
     if not chave:
         erro("Falta o secret VAPID_PRIVATE_KEY (Settings > Secrets and variables > Actions).")
@@ -127,6 +127,9 @@ def main():
     publica = re.search(r'vapidPublica:\s*"([^"]+)"', open(os.path.join(RAIZ, "config.js"), encoding="utf-8").read()).group(1)
     if pub != publica:
         erro("VAPID_PRIVATE_KEY não combina com a chave pública do app (config.js): copie de novo a de privado/VAPID_PRIVATE_KEY.txt.")
+    print("::notice::VAPID_PRIVATE_KEY ok (combina com a chave do app).")
+    if not subs:
+        sys.exit(1)
     if os.environ.get("TESTE"):
         print(f"::notice::Teste ok: {len(subs)} aparelho(s) cadastrado(s) e chave VAPID certa. Nada foi enviado.")
         return
